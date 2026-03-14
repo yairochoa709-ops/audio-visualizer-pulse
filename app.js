@@ -94,15 +94,15 @@ class Dot {
 
         if (this.vis.mode === 'diamond') {
             // Modo "Marea Ecuatorial": Ondas basadas en longitud 
-            const waveAmplitude = 0.3 + (this.vis.normalizedBass * 0.7);
+            const waveAmplitude = 0.2 + (this.vis.normalizedBass * 0.4);
             waveSine = waveAmplitude * Math.sin(this.vis.globalTime * 3 - this.lon * 5);
-            audioPush = (audioVal * 0.7) + (this.vis.normalizedEnergy * 0.5) + Math.max(0, waveSine);
+            audioPush = (audioVal * 0.4) + (this.vis.normalizedEnergy * 0.3) + Math.max(0, waveSine);
 
         } else if (this.vis.mode === 'chevron') {
             // Modo "Pulsos Polares": Ondas basadas en latitud
-            const waveAmplitude = 0.4 + (this.vis.normalizedBass * 0.5);
+            const waveAmplitude = 0.25 + (this.vis.normalizedBass * 0.3);
             waveSine = waveAmplitude * Math.sin(this.vis.globalTime * 3 - this.lat * 5);
-            audioPush = (audioVal * 0.4) + (this.vis.normalizedEnergy * 0.6) + Math.max(0, waveSine);
+            audioPush = (audioVal * 0.25) + (this.vis.normalizedEnergy * 0.4) + Math.max(0, waveSine);
         }
 
         // --- 2. Física Newtoniana (Hooks Law + Damping) ---
@@ -281,19 +281,19 @@ class AudioVisualizer {
 
     preRenderAllGlowSprites() {
         this.glowSprites = []; // Array 3D: [12 Hues][6 Variants][10 Levels]
-        const peakColor = { r: 255, g: 200, b: 200 }; // Blanco Cálido para los picos de las ondas
 
         for (let h = 0; h < NUM_HUES; h++) {
             const arrVariants = [];
             // Hue de 0 a 1 (0 a 360 grados HSL)
             const hueBase = h / NUM_HUES;
             const baseColor = hslToRgb(hueBase, 1.0, 0.5); // Saturación 100%, Brillo 50%
+            const peakColor = hslToRgb(hueBase, 1.0, 0.85); // Mismo tono, pero casi blanco (Brillantez 85%)
             
             for(let v = 0; v < COLOR_VARIANTS; v++) {
                 const arrNiveles = [];
-                // Mezclamos el color base hacia el peakColor de energía (shiftAmt)
+                // Mezclamos el color base hacia su versión brillante de energía (shiftAmt)
                 const shiftAmt = v / (COLOR_VARIANTS - 1); // 0 a 1
-                const maxShiftOpacity = 0.8; // Para no perder el tono base original del todo
+                const maxShiftOpacity = 0.9;
                 const varColor = mixColorsRGB(baseColor, peakColor, shiftAmt * maxShiftOpacity); 
                 const varColorStr = `rgb(${Math.round(varColor.r)}, ${Math.round(varColor.g)}, ${Math.round(varColor.b)})`;
 
@@ -301,7 +301,7 @@ class AudioVisualizer {
                     const intensity = i / (this.glowLevels - 1); 
                     const offCanvas = document.createElement('canvas');
                     const padding = 40; 
-                    const maxRadius = 4 + (intensity * 6); 
+                    const maxRadius = 3 + (intensity * 4); 
                     
                     offCanvas.width = maxRadius * 2 + padding * 2;
                     offCanvas.height = maxRadius * 2 + padding * 2;
@@ -316,8 +316,9 @@ class AudioVisualizer {
                     if (intensity === 0) {
                         offCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
                     } else {
-                        const isKick = (intensity > 0.8) && (v > 3);
-                        offCtx.fillStyle = isKick ? '#ffffff' : varColorStr;
+                        // Ya no forzamos un '#ffffff' indiscriminado
+                        // Usamos la variante de color brillante con intenso glow propio del HSL local
+                        offCtx.fillStyle = varColorStr;
                         offCtx.shadowBlur = 5 + (intensity * 30);
                         offCtx.shadowColor = varColorStr;
                     }
