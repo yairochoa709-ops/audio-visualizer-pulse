@@ -50,10 +50,15 @@ let docs = [];
 let cols = 0;
 let rows = 0;
 let mode = 'diamond'; // 'diamond' o 'chevron'
-let modeTimer = 0;
+let lastBeatTime = 0; // Cooldown para Beat Detection
+const BEAT_COOLDOWN = 2000; // 2 segundos en ms
 const glowLevels = 10;
 let glowSprites = []; // Array de canvases pre-renderizados
 let lastRenderedColorStr = '';
+
+// --- Variables Físicas Globales ---
+let globalTime = 0; // Fase global de las ondas
+let previousTimeMs = performance.now();
 
 class Dot {
     constructor(col, row, x, y, maxDistance) {
@@ -62,53 +67,65 @@ class Dot {
         this.x = x;
         this.y = y;
         
-        // Calcular distancia Manhattan al centro para Modo Diamante
+        // Calcular distancias para retrasos de fase (delay)
         const centerX = cols / 2;
         const centerY = rows / 2;
         this.manhattanDist = Math.abs(col - centerX) + Math.abs(row - centerY);
         this.maxManhattan = maxDistance;
+        this.distFromCenterCol = Math.abs(this.col - centerX);
+
+        // Delay para el efecto telaraña/fluido
+        // Cada punto tiene una fase ligeralmente retrasada de su vecino
+        this.phaseDelayDiamond = this.manhattanDist * 0.15;
+        this.phaseDelayChevron = (this.distFromCenterCol + this.row) * 0.2;
 
         // Variables dinámicas
         this.targetEnergy = 0;
         this.currentEnergy = 0;
+        
+        // Posición actual base (las ondas podrán mover ligeramente el Y)
+        this.baseY = y;
     }
 
-    update(audioData, energyTotal, currentMode) {
+    update(audioData, energyTotal, currentMode, bassInfluence) {
         // En base al modo, decidimos cuánta atención le presta al audio
         let newTarget = 0;
+        let waveSine = 0;
 
         if (currentMode === 'diamond') {
-            // Expansión desde el centro (Bass y medios en el centro, altos lejos)
-            // Normalizar la distancia para mapear a los bins del audio
-            const normalizedDist = this.manhattanDist / this.maxManhattan; // 0 (centro) a 1 (borde)
+            const normalizedDist = this.manhattanDist / this.maxManhattan; 
+            const dataIndex = Math.floor(normalizedDist * 60); 
+            const audioVal = audioData[Math.min(dataIndex, audioData.length - 1)] / 255.0; 
             
-            // Queremos que el centro reaccione a bajos (índices 0-10) y los bordes a medios/altos
-            const dataIndex = Math.floor(normalizedDist * 60); // Tomamos de los primeros 60 bins
-            const audioVal = audioData[Math.min(dataIndex, audioData.length - 1)] / 255.0; // 0 a 1
+            // Onda dinámica
+            // Amplitud base + influencia de los bajos globales
+            const waveAmplitude = 0.3 + (bassInfluence * 0.7);
+            // Math.sin(frecuencia * tiempo - delay)
+            waveSine = waveAmplitude * Math.sin(globalTime - this.phaseDelayDiamond);
             
-            // El centro pulsa más con overall energy también
-            const centerBoost = Math.max(0, 1 - (this.manhattanDist / 10)); // Boost para los 10 primeros anillos del rombo
+            const centerBoost = Math.max(0, 1 - (this.manhattanDist / 10)); 
             
-            newTarget = (audioVal * 0.7) + (energyTotal * centerBoost * 0.8);
+            // El target es una mezcla del audio puntual, la energía total y la onda fluida cruzada
+            newTarget = (audioVal * 0.5) + (energyTotal * centerBoost * 0.5) + Math.max(0, waveSine);
 
         } else if (currentMode === 'chevron') {
-            // Modo Cheurón: Reacciones en V
-            // Calculamos un valor en "V" basado en la columna respecto al centro
-            const centerX = cols / 2;
-            const distFromCenterCol = Math.abs(this.col - centerX);
-            
-            // La onda viaja hacia arriba/abajo (usamos la fila)
-            // Índice basado en la V que forma la columna + fila
-            const waveIndex = (distFromCenterCol + this.row) % 40; 
+            const waveIndex = (this.distFromCenterCol + this.row) % 40; 
             const audioVal = audioData[waveIndex] / 255.0;
             
-            newTarget = audioVal * (0.4 + energyTotal * 0.6);
+            // Onda en V
+            const waveAmplitude = 0.4 + (bassInfluence * 0.5);
+            waveSine = waveAmplitude * Math.sin(globalTime - this.phaseDelayChevron);
+            
+            newTarget = (audioVal * 0.3) + (energyTotal * 0.3) + Math.max(0, waveSine);
         }
 
         this.targetEnergy = newTarget;
         
         // Fluidity: Lerp constante para que se vea como Samsung Ambient Mode (fluido, nunca instantáneo)
         this.currentEnergy = lerp(this.currentEnergy, this.targetEnergy, 0.15);
+        
+        // Añadir una levísima oscilación vertical (como superficie de agua)
+        this.y = this.baseY + (waveSine * 10 * bassInfluence); // Sube y baja unos píxeles con el beat
     }
 
     draw(ctx, sprites) {
@@ -245,21 +262,41 @@ function draw() {
 
     analyser.getByteFrequencyData(dataArray);
 
-    // Fondo OLED Negro puro, sin rastro (motion blur era genal para partículas, pero no para rejilla geométrica)
+    // Fondo OLED Negro puro
     ctx.fillStyle = '#000000'; 
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // --- MODO AMBIENTE Y COLOR DINÁMICO ---
+    // --- ANÁLISIS ESPECTRAL AVANZADO ---
 
-    // Calcular intensidad total (Energía RMS o promedio)
+    // Energía Total (RMS)
     let totalEnergy = 0;
+    let bassEnergy = 0;
+    let trebleEnergy = 0;
+
     for (let i = 0; i < dataArray.length; i++) {
-        totalEnergy += dataArray[i];
+        const val = dataArray[i];
+        totalEnergy += val;
+        if (i < 15) bassEnergy += val; // Primeros bins para Bajos
+        if (i > 100 && i < 300) trebleEnergy += val; // Altos/Agudos
     }
-    const avgEnergy = totalEnergy / dataArray.length;
     
-    // Normalizar a 0-1 (usualmente 128 es un volumen bastante alto)
+    // Promedios y normalizaciones
+    const avgEnergy = totalEnergy / dataArray.length;
+    const avgBass = bassEnergy / 15;
+    const avgTreble = trebleEnergy / 200;
+    
     const normalizedEnergy = Math.min(1.0, Math.max(0.0, avgEnergy / 128.0)); 
+    const normalizedBass = Math.min(1.0, Math.max(0.0, avgBass / 200.0)); 
+    const normalizedTreble = Math.min(1.0, Math.max(0.0, avgTreble / 100.0)); 
+
+    // --- RELOJ GLOBAL (Fase fluida modulada por la música) ---
+    const nowMs = performance.now();
+    const dt = (nowMs - previousTimeMs) / 1000.0; // deltaTime en segundos
+    previousTimeMs = nowMs;
+
+    // La wave base se mueve sola lentamente, pero si hay Treble (agudos), acelera drásticamente
+    const timeSpeed = 1.0 + (normalizedTreble * 15.0);
+    globalTime += dt * timeSpeed; 
 
     // Obtener color objetivo y aplicar suavizado a currentAmbientColor
     const targetColor = interpolateColor(normalizedEnergy);
@@ -282,22 +319,27 @@ function draw() {
         preRenderGlowSprites(rStr, gStr, bStr);
     }
 
-    // --- TRANSICIÓN DE MODOS (Diamante vs Cheurón) ---
-    modeTimer++;
-    // Cambiar de modo aproximadamente cada 15 segundos (15s * ~60fps = 900 frames)
-    // O cuando hay un "drop" inmenso y ha pasado un rato prudente (400 frames mínimo)
-    if (modeTimer > 900 || (normalizedEnergy > 0.85 && modeTimer > 400)) {
+    // --- BEAT DETECTION Y TRANSICIÓN DE MODOS ---
+    
+    // Si detectamos un pico violento de bajo (> 0.85) Y pasaron 2 segundos (Cooldown)
+    if (normalizedBass > 0.85 && (nowMs - lastBeatTime > BEAT_COOLDOWN)) {
         mode = mode === 'diamond' ? 'chevron' : 'diamond';
-        modeTimer = 0;
+        lastBeatTime = nowMs;
     }
 
-    // Actualizar y dibujar rejilla
-    const ctxGlobalAlphaCache = ctx.globalAlpha; // Restaurar después
+    // Actualizar y dibujar rejilla usando Lighter Composition
+    const ctxGlobalAlphaCache = ctx.globalAlpha; 
+    
+    // EFECTO DE LUZ: Los colores se van a sumar digitalmente
+    ctx.globalCompositeOperation = 'lighter'; 
 
     for (let i = 0; i < docs.length; i++) {
-        docs[i].update(dataArray, normalizedEnergy, mode);
+        // Le pasamos el bassInfluence como modulador de amplitud a la onda senoidal
+        docs[i].update(dataArray, normalizedEnergy, mode, normalizedBass);
         docs[i].draw(ctx, glowSprites);
     }
 
-    ctx.globalAlpha = ctxGlobalAlphaCache; // Reset
+    // Restaurar los modos generales para el próximo frame
+    ctx.globalCompositeOperation = 'source-over'; 
+    ctx.globalAlpha = ctxGlobalAlphaCache; 
 }
