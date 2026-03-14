@@ -109,8 +109,22 @@ class Dot {
         // rad2D nos dice si el punto está dibujándose en el centro o en los bordes por la proyección 2D
         const rad2D = Math.sqrt(this.currentX * this.currentX + this.currentY * this.currentY);
         this.edgeFactor = Math.min(1.0, rad2D / this.maxRadius); // 0 = Centro, 1 = Borde
+        const centerFactor = Math.max(0.0, 1.0 - this.edgeFactor); // 1 = Centro, 0 = Borde
+
+        // --- 1.8 Efecto NCS (Topología Vectorial 3D de Desplazamiento) ---
+        // Extraemos la frecuencia de audio Pura (bajos a agudos) guiada por el Index 
+        // de este polvo cósmico particular para generar su Valle/Pico específico
+        const audioTopo = (this.vis.smoothedDataArray[dataIndex] / 255.0); 
+
+        // Generamos un campo gravitacional que empuja fuera la coordenada tridimensional XYZ local.
+        // Combinamos la física del "waveSine", la estática del "audioTopo" y un multiplicador
+        // Multiplicado por *centerFactor*, el efecto colapsa en los bordes formando un Anillo Circular Limpio
+        let pushDisplacement = (audioTopo * 0.7) + (waveSine * 0.5);
+        if (pushDisplacement < 0) pushDisplacement = 0;
         
-        // Los nodos reducen su aceleración y reacción rítmica hasta un 20% al acercarse al centro
+        let displacementMagnitude = pushDisplacement * 1.5 * centerFactor;
+
+        // Los nodos reducen su aceleración elástica per se con el requerimiento central del paso anterior
         audioPush *= (0.8 + 0.2 * this.edgeFactor);
 
         // --- 2. Física Newtoniana (Hooks Law + Damping) ---
@@ -125,16 +139,20 @@ class Dot {
         if(this.currentSize < 0) this.currentSize = 0; 
 
         // --- 3. Manipulación y Rotación 3D ---
-        const rotY = this.vis.globalTime * 0.15; // Rotación en el eje vertical súper lenta
-        const rotX = Math.sin(this.vis.globalTime * 0.1) * 0.15; // Cabeceo súper leve y lento
-        const rotZ = this.vis.globalTime * 0.05; // Rotación lateral arrastrada
+        const rotY = this.vis.globalTime * 0.15; 
+        const rotX = Math.sin(this.vis.globalTime * 0.1) * 0.15; 
+        const rotZ = this.vis.globalTime * 0.05; 
 
-        // Pulso de Escala (La esfera "respira" con los bajos)
-        const expandPulse = 1.0 + (this.vis.normalizedBass * 0.3) + pseudoNoise(this.baseX, this.baseY, this.vis.globalTime) * 0.05;
+        // Pulso de Escala Base Respiratoria "Oculto" 
+        const expandPulse = 1.0 + (this.vis.normalizedBass * 0.15) + pseudoNoise(this.baseX, this.baseY, this.vis.globalTime) * 0.05;
         
-        const px = this.baseX * expandPulse;
-        const py = this.baseY * expandPulse;
-        const pz = this.baseZ * expandPulse;
+        // Sumamos el desplazamiento gravitacional a la escala base y extendemos vectorialmente X, Y y Z
+        // antes de rotarlos. ¡Esto altera físicamente la forma Base de la Rejilla!
+        const finalDistortion = expandPulse + displacementMagnitude;
+
+        const px = this.baseX * finalDistortion;
+        const py = this.baseY * finalDistortion;
+        const pz = this.baseZ * finalDistortion;
         
         // Rotar Z
         const x1 = px * Math.cos(rotZ) - py * Math.sin(rotZ);
@@ -149,7 +167,7 @@ class Dot {
         const z2 = z1 * Math.cos(rotX) + y1 * Math.sin(rotX);
         
         this.currentX = x2;
-        this.currentY = y2 + (waveSine * 5 * this.vis.normalizedTreble); 
+        this.currentY = y2; // Eliminamos la ola Y "falsa" agregada en los pasos de rejilla 2D del pasado
         this.currentZ = z2;
         
         // --- 4. Proyección de Perspectiva 2D (Focal) ---
