@@ -47,116 +47,139 @@ function interpolateColor(energy) {
 }
 
 // ==========================================
-// CLASE DOT (PARTÍCULA CON FÍSICA ELÁSTICA)
+// CLASE DOT (PARTÍCULA ESPACIAL 3D)
 // ==========================================
 class Dot {
-    constructor(col, row, x, y, maxDistance, visualizer) {
-        this.vis = visualizer; // Referencia al orquestador visualizer
-        this.col = col;
-        this.row = row;
+    constructor(index, x, y, z, maxRadius, visualizer) {
+        this.vis = visualizer; 
+        this.index = index;
         
-        // Coordenadas Base
+        // Coordenadas Base 3D Locales
         this.baseX = x;
         this.baseY = y;
-        this.x = x;
-        this.y = y;
+        this.baseZ = z;
+        this.maxRadius = maxRadius;
         
-        // Topología
-        const centerX = this.vis.cols / 2;
-        const centerY = this.vis.rows / 2;
-        this.manhattanDist = Math.abs(col - centerX) + Math.abs(row - centerY);
-        this.distFromCenterCol = Math.abs(this.col - centerX);
+        // Coordenadas Actuales 3D Rotadas
+        this.currentX = x;
+        this.currentY = y;
+        this.currentZ = z;
+        
+        // Coordenadas 2D Pantalla Proyectadas
+        this.x = 0;
+        this.y = 0;
+        this.scale = 1;
+        
+        // Ángulos polares (para efectos matemáticos de onda)
+        this.lat = Math.asin(this.baseY / maxRadius);
+        this.lon = Math.atan2(this.baseZ, this.baseX);
 
         // Física Elástica (Damping & Elasticity)
         this.targetSize = 0;
         this.currentSize = 0;
-        this.velocity = 0;         // Velocidad de cambio de tamaño
-        this.acceleration = 0;     // Aceleración provista por la música
-        this.friction = 0.82;      // Qué tan rápido pierde velocidad (0-1)
-        this.elasticity = 0.15;    // Qué tan fuerte busca regresar al tamaño base
-
-        // Delay para el efecto ola/fluido
-        this.phaseDelayDiamond = this.manhattanDist * 0.15;
-        this.phaseDelayChevron = (this.distFromCenterCol + this.row) * 0.2;
+        this.velocity = 0;         
+        this.acceleration = 0;     
+        this.friction = 0.82;      
+        this.elasticity = 0.15;    
     }
 
     update() {
-        // --- 1. Lógica Acústica y Modos Espaciales ---
+        // --- 1. Lógica Acústica y Modos Esféricos ---
         let audioPush = 0;
         let waveSine = 0;
 
+        const dataIndex = Math.floor((this.index / this.vis.dots.length) * 100); 
+        const audioVal = this.vis.smoothedDataArray[Math.min(dataIndex, 100)] / 255.0; 
+
         if (this.vis.mode === 'diamond') {
-            const normalizedDist = this.manhattanDist / this.vis.maxManhattan; 
-            
-            // MAPEO LOGARÍTMICO SIMULADO: Usamos una curva de potencia para buscar índices
-            // Los puntos centrales buscan en frecuencias bajas (0-10), los alejados en altas
-            const logIndexMap = Math.pow(normalizedDist, 1.5); 
-            const dataIndex = Math.floor(logIndexMap * 100); 
-            // Usamos el 'smoothedData' del visualizer (Time-Smoothing)
-            const audioVal = this.vis.smoothedDataArray[Math.min(dataIndex, 100)] / 255.0; 
-            
-            // Onda dinámica
+            // Modo "Marea Ecuatorial": Ondas basadas en longitud 
             const waveAmplitude = 0.3 + (this.vis.normalizedBass * 0.7);
-            waveSine = waveAmplitude * Math.sin(this.vis.globalTime - this.phaseDelayDiamond);
-            const centerBoost = Math.max(0, 1 - (this.manhattanDist / 10)); 
-            
-            // Impulso base
-            audioPush = (audioVal * 0.6) + (this.vis.normalizedEnergy * centerBoost * 0.6) + Math.max(0, waveSine);
+            waveSine = waveAmplitude * Math.sin(this.vis.globalTime * 3 - this.lon * 5);
+            audioPush = (audioVal * 0.7) + (this.vis.normalizedEnergy * 0.5) + Math.max(0, waveSine);
 
         } else if (this.vis.mode === 'chevron') {
-            const waveIndex = (this.distFromCenterCol + this.row) % 40; 
-            const audioVal = this.vis.smoothedDataArray[waveIndex] / 255.0;
-            
+            // Modo "Pulsos Polares": Ondas basadas en latitud
             const waveAmplitude = 0.4 + (this.vis.normalizedBass * 0.5);
-            waveSine = waveAmplitude * Math.sin(this.vis.globalTime - this.phaseDelayChevron);
-            
-            audioPush = (audioVal * 0.4) + (this.vis.normalizedEnergy * 0.4) + Math.max(0, waveSine);
+            waveSine = waveAmplitude * Math.sin(this.vis.globalTime * 3 - this.lat * 5);
+            audioPush = (audioVal * 0.4) + (this.vis.normalizedEnergy * 0.6) + Math.max(0, waveSine);
         }
 
         // --- 2. Física Newtoniana (Hooks Law + Damping) ---
-        // audioPush actúa como la fuerza/aceleración acústica
         this.acceleration = audioPush;
-        
-        // Sumar aceleración a la velocidad
         this.velocity += this.acceleration;
-        
-        // Hooke's Law (Elasticidad): Fuerza que empuja hacia el descanso (Size = 0)
         const restoringForce = (0 - this.currentSize) * this.elasticity;
         this.velocity += restoringForce;
-
-        // Fricción: Aplicar amortiguamiento (Damping)
         this.velocity *= this.friction;
-
-        // Limitar velocidad extrema de explosiones (Kicks potentes)
         if(this.velocity > 2) this.velocity = 2;
         
-        // Actualizar tamaño final y evitar encogimientos negativos
         this.currentSize += this.velocity;
         if(this.currentSize < 0) this.currentSize = 0; 
 
-        // --- 3. Posición Fluida (Pseudo Perlin Noise) ---
-        // Movimiento serpenteante orgánico en BaseX/BaseY sin música
-        const noiseX = pseudoNoise(this.col, this.row + this.vis.globalTime, this.vis.globalTime * 0.5);
-        const noiseY = pseudoNoise(this.col + this.vis.globalTime, this.row, this.vis.globalTime * 0.5);
+        // --- 3. Manipulación y Rotación 3D ---
+        const rotY = this.vis.globalTime * 0.5; // Rotación en el eje vertical
+        const rotX = Math.sin(this.vis.globalTime * 0.2) * 0.3; // Cabeceo leve
+        const rotZ = this.vis.globalTime * 0.1;
+
+        // Pulso de Escala (La esfera "respira" con los bajos)
+        const expandPulse = 1.0 + (this.vis.normalizedBass * 0.3) + pseudoNoise(this.baseX, this.baseY, this.vis.globalTime) * 0.05;
         
-        // La oscilación incrementa la marea sutilmente
-        this.x = this.baseX + (noiseX * 5) + (waveSine * 5);
-        this.y = this.baseY + (noiseY * 5) + (waveSine * 10 * this.vis.normalizedBass); 
+        const px = this.baseX * expandPulse;
+        const py = this.baseY * expandPulse;
+        const pz = this.baseZ * expandPulse;
+        
+        // Rotar Z
+        const x1 = px * Math.cos(rotZ) - py * Math.sin(rotZ);
+        const y1 = py * Math.cos(rotZ) + px * Math.sin(rotZ);
+
+        // Rotar Y
+        const x2 = x1 * Math.cos(rotY) - pz * Math.sin(rotY);
+        const z1 = pz * Math.cos(rotY) + x1 * Math.sin(rotY);
+        
+        // Rotar X
+        const y2 = y1 * Math.cos(rotX) - z1 * Math.sin(rotX);
+        const z2 = z1 * Math.cos(rotX) + y1 * Math.sin(rotX);
+        
+        this.currentX = x2;
+        this.currentY = y2 + (waveSine * 5 * this.vis.normalizedTreble); 
+        this.currentZ = z2;
+        
+        // --- 4. Proyección de Perspectiva 2D (Focal) ---
+        const fov = 1000;
+        const viewerDistance = 1500; 
+        const zProj = viewerDistance + this.currentZ;
+        
+        this.scale = fov / zProj;
+        
+        const centerX = this.vis.canvas.width / 2;
+        const centerY = this.vis.canvas.height / 2;
+        
+        this.x = centerX + this.currentX * this.scale;
+        this.y = centerY + this.currentY * this.scale;
     }
 
     draw(ctx) {
-        // En lugar de currentEnergy lineal, usamos nuestro volumen "elástico/amortiguado" (currentSize)
         const energyIndex = Math.min(this.vis.glowLevels - 1, Math.floor(this.currentSize * this.vis.glowLevels));
         if (energyIndex < 0) return;
 
-        let alpha = 0.1 + (this.currentSize * 0.8);
+        // Efecto Parallax / Layering (Profundidad) 
+        // Generamos un coeficiente de profundidad donde Z-negativo (lejos) es 0, y Z-positivo (cerca) es 1
+        const depthNorm = (this.currentZ + this.maxRadius) / (this.maxRadius * 2); 
+        
+        // Los puntos lejanos son más tenues. Este es el efecto Parallax Inmersivo real 3D
+        let alpha = 0.05 + (depthNorm * 0.4) + (this.currentSize * 0.5);
         if (alpha > 1) alpha = 1;
+        if (alpha < 0) alpha = 0;
 
         const sprite = this.vis.glowSprites[energyIndex];
         if (!sprite) return;
 
         ctx.globalAlpha = alpha;
-        ctx.drawImage(sprite, this.x - sprite.width / 2, this.y - sprite.height / 2);
+        
+        // Escalar por perspectiva para que los puntos lejanos se vean más pequeños físicamente
+        const dimW = sprite.width * this.scale;
+        const dimH = sprite.height * this.scale;
+
+        ctx.drawImage(sprite, this.x - dimW / 2, this.y - dimH / 2, dimW, dimH);
     }
 }
 
@@ -177,17 +200,13 @@ class AudioVisualizer {
         // Time-Smoothing Array
         this.smoothedDataArray = null;
         
-        // Estética y Rejilla
-        this.GRID_SPACING = 35;
+        // Estética y Rejilla/Esfera
         this.glowLevels = 10;
         this.glowSprites = [];
         this.lastRenderedColorStr = '';
         this.currentAmbientColor = { r: 0, g: 255, b: 255 };
         
         this.dots = [];
-        this.cols = 0;
-        this.rows = 0;
-        this.maxManhattan = 0;
         
         // Rítmica y Física Global
         this.mode = 'diamond';
@@ -280,22 +299,29 @@ class AudioVisualizer {
 
     initGrid() {
         this.dots = [];
-        this.cols = Math.floor(this.canvas.width / this.GRID_SPACING);
-        this.rows = Math.floor(this.canvas.height / this.GRID_SPACING);
+        
+        // Mapeo Esférico basado en Secuencia de Fibonacci para distribuir puntos uniformemente
+        const numDots = 1500; // Gran cantidad de puntos para una esfera fluida 3D
+        // El radio es más o menos el 45% del tamaño más pequeño de la pantalla
+        const radius = Math.min(this.canvas.width, this.canvas.height) * 0.45; 
+        const phi = Math.PI * (3 - Math.sqrt(5)); // Golden angle
 
-        const offsetX = (this.canvas.width - (this.cols * this.GRID_SPACING)) / 2 + (this.GRID_SPACING/2);
-        const offsetY = (this.canvas.height - (this.rows * this.GRID_SPACING)) / 2 + (this.GRID_SPACING/2);
-
-        const centerX = this.cols / 2;
-        const centerY = this.rows / 2;
-        this.maxManhattan = Math.abs(0 - centerX) + Math.abs(0 - centerY); 
-
-        for (let row = 0; row < this.rows; row++) {
-            for (let col = 0; col < this.cols; col++) {
-                const x = offsetX + col * this.GRID_SPACING;
-                const y = offsetY + row * this.GRID_SPACING;
-                this.dots.push(new Dot(col, row, x, y, this.maxManhattan, this));
-            }
+        for (let i = 0; i < numDots; i++) {
+            // Y va de 1 a -1 (polo norte a polo sur)
+            const y = 1 - (i / (numDots - 1)) * 2; 
+            const r = Math.sqrt(1 - y * y); // Radio ajustado a la altura Y
+            
+            const theta = phi * i; // Golden angle ratio
+            
+            const x = Math.cos(theta) * r;
+            const z = Math.sin(theta) * r;
+            
+            // Escalar al radio de pantalla requerido
+            const px = x * radius;
+            const py = y * radius;
+            const pz = z * radius;
+            
+            this.dots.push(new Dot(i, px, py, pz, radius, this));
         }
     }
 
@@ -387,15 +413,31 @@ class AudioVisualizer {
             this.preRenderGlowSprites(rStr, gStr, bStr);
         }
 
-        // --- ACTUALIZACIÓN Y DIBUJO CON ADICIÓN DE LUZ (Lighter) ---
+        // --- ACTUALIZACIÓN Y DIBUJO 3D ---
         const ctxGlobalAlphaCache = this.ctx.globalAlpha; 
-        
-        // Magia visual: Colores sobrepuestos se suman, emulando la física de pantallas LED intensas.
-        this.ctx.globalCompositeOperation = 'lighter'; 
 
+        // Actualizar datos matemáticos
         for (let i = 0; i < this.dots.length; i++) {
             this.dots[i].update();
-            this.dots[i].draw(this.ctx);
+        }
+
+        // --- ORDENAMIENTO EN PROFUNDIDAD (Z-SORTING) ---
+        // Vital para la ilusión 3D: Los puntos lejanos deben dibujarse primero (atrás), los cercanos al final (frente).
+        // Se hace un slice() para clonar temporalmente y no destruir el array original seguido de un sort()
+        const sortedDots = this.dots.slice().sort((a, b) => a.currentZ - b.currentZ);
+
+        // --- RENDERIZADO CON MOTION BLUR PARA MAYOR INMERSIÓN 3D ---
+        // Volvemos a un ligero tint negro (0.35) para que no haya mareo pero las chispas de la esfera dejen una cola
+        this.ctx.globalCompositeOperation = 'source-over';
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'; 
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Colores se suman digitalmente (Composición Lighter)
+        this.ctx.globalCompositeOperation = 'lighter'; 
+
+        // Trazado en orden de capas
+        for (let i = 0; i < sortedDots.length; i++) {
+            sortedDots[i].draw(this.ctx);
         }
 
         // Restaurar modo general para el próximo background clear
