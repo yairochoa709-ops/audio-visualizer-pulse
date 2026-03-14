@@ -44,105 +44,161 @@ function interpolateColor(energy) {
     };
 }
 
-// --- Configuración del Sistema de Partículas ---
-const particles = [];
-const NUM_PARTICLES = 3000;
-let bassShockwave = 0; // Ondas de choque
-let lastBass = 0; // Para detectar "golpes" de bajo
+// --- Configuración Rejilla Geométrica ---
+const GRID_SPACING = 35;
+let docs = [];
+let cols = 0;
+let rows = 0;
+let mode = 'diamond'; // 'diamond' o 'chevron'
+let modeTimer = 0;
+const glowLevels = 10;
+let glowSprites = []; // Array de canvases pre-renderizados
+let lastRenderedColorStr = '';
 
-class Particle {
-    constructor(isCore = false) {
-        this.isCore = isCore;
-        this.reset();
-        // Distribuir partículas inicialmente
-        this.angle = Math.random() * Math.PI * 2;
-        this.distance = isCore ? Math.random() * 50 : 50 + Math.random() * 500;
-        this.z = Math.random() * 1000; // Profundidad simulada
+class Dot {
+    constructor(col, row, x, y, maxDistance) {
+        this.col = col;
+        this.row = row;
+        this.x = x;
+        this.y = y;
+        
+        // Calcular distancia Manhattan al centro para Modo Diamante
+        const centerX = cols / 2;
+        const centerY = rows / 2;
+        this.manhattanDist = Math.abs(col - centerX) + Math.abs(row - centerY);
+        this.maxManhattan = maxDistance;
+
+        // Variables dinámicas
+        this.targetEnergy = 0;
+        this.currentEnergy = 0;
     }
 
-    reset() {
-        this.angle = Math.random() * Math.PI * 2;
-        // El núcleo está en el centro, las bandas se distribuyen hacia afuera
-        this.distance = this.isCore ? Math.random() * 40 : 80 + Math.random() * (canvas.width / 1.5);
-        this.baseDistance = this.distance;
-        this.speed = (Math.random() * 0.02) + 0.005;
-        this.z = 1000; // Manda la partícula "lejos" para el efecto túnel
-        
-        // Variación de oscuridad para dar profundidad al vórtice
-        this.darkenOffset = 20 + Math.random() * 50; 
-    }
+    update(audioData, energyTotal, currentMode) {
+        // En base al modo, decidimos cuánta atención le presta al audio
+        let newTarget = 0;
 
-    update(midsAvg, trebleAvg, bassAvg, shockwave) {
-        // Velocidad de rotación base + alteración por Mids (Voces/Melodías)
-        this.angle += (this.speed * (1 + (midsAvg / 100)));
-
-        // Acercar partículas hacia la cámara (efecto túnel)
-        this.z -= (5 + (trebleAvg / 10)); 
-        if (this.z <= 0) this.reset();
-
-        // Expansión y ondas de choque (Bass)
-        let currentDistance = this.baseDistance;
-        
-        if (!this.isCore) {
-            // Ondulación/vibración basada en altos y medios
-            const vibration = Math.sin(this.angle * 10) * (trebleAvg / 5);
+        if (currentMode === 'diamond') {
+            // Expansión desde el centro (Bass y medios en el centro, altos lejos)
+            // Normalizar la distancia para mapear a los bins del audio
+            const normalizedDist = this.manhattanDist / this.maxManhattan; // 0 (centro) a 1 (borde)
             
-            // Reemplazo a bandas concéntricas afectadas por la onda de choque
-            // Si la partícula está cerca del radio de la onda, empujarla hacia afuera
-            const shockwaveEffect = Math.max(0, 100 - Math.abs(currentDistance - shockwave)) / 100;
-            const push = shockwaveEffect * (bassAvg * 1.5);
+            // Queremos que el centro reaccione a bajos (índices 0-10) y los bordes a medios/altos
+            const dataIndex = Math.floor(normalizedDist * 60); // Tomamos de los primeros 60 bins
+            const audioVal = audioData[Math.min(dataIndex, audioData.length - 1)] / 255.0; // 0 a 1
             
-            currentDistance += vibration + push;
+            // El centro pulsa más con overall energy también
+            const centerBoost = Math.max(0, 1 - (this.manhattanDist / 10)); // Boost para los 10 primeros anillos del rombo
+            
+            newTarget = (audioVal * 0.7) + (energyTotal * centerBoost * 0.8);
+
+        } else if (currentMode === 'chevron') {
+            // Modo Cheurón: Reacciones en V
+            // Calculamos un valor en "V" basado en la columna respecto al centro
+            const centerX = cols / 2;
+            const distFromCenterCol = Math.abs(this.col - centerX);
+            
+            // La onda viaja hacia arriba/abajo (usamos la fila)
+            // Índice basado en la V que forma la columna + fila
+            const waveIndex = (distFromCenterCol + this.row) % 40; 
+            const audioVal = audioData[waveIndex] / 255.0;
+            
+            newTarget = audioVal * (0.4 + energyTotal * 0.6);
         }
 
-        return { currentDistance };
+        this.targetEnergy = newTarget;
+        
+        // Fluidity: Lerp constante para que se vea como Samsung Ambient Mode (fluido, nunca instantáneo)
+        this.currentEnergy = lerp(this.currentEnergy, this.targetEnergy, 0.15);
     }
 
-    draw(ctx, centerX, centerY, currentDistance, zScale, isCoreExploding, ambientColorStr, ambientColor) {
-        const px = centerX + Math.cos(this.angle) * currentDistance * zScale;
-        const py = centerY + Math.sin(this.angle) * currentDistance * zScale;
-        
-        // Tamaño simulado por perspectiva 3D
-        const size = (this.isCore ? 3 : 1.5) * zScale;
+    draw(ctx, sprites) {
+        const energyIndex = Math.min(glowLevels - 1, Math.floor(this.currentEnergy * glowLevels));
+        if (energyIndex < 0) return;
 
-        ctx.beginPath();
-        ctx.arc(px, py, Math.max(0.1, size), 0, Math.PI * 2);
+        // Opacidad general baja si está lejos (Atenuación estática de ambiente)
+        // Pero sube si tiene mucha energía
+        let alpha = 0.1 + (this.currentEnergy * 0.9);
+        if (alpha > 1) alpha = 1;
 
-        if (this.isCore) {
-            // Centro que pulsa intensamente
-            ctx.fillStyle = isCoreExploding ? '#fff' : ambientColorStr; 
-            ctx.shadowBlur = 15 * zScale;
-            ctx.shadowColor = ambientColorStr;
-        } else {
-            // Bandas de vórtice basadas en el color ambiente actual
-            const pr = Math.max(0, ambientColor.r - this.darkenOffset);
-            const pg = Math.max(0, ambientColor.g - this.darkenOffset);
-            const pb = Math.max(0, ambientColor.b - this.darkenOffset);
-            const pColorStr = `rgb(${pr}, ${pg}, ${pb})`;
+        const sprite = sprites[energyIndex];
+        if (!sprite) return;
 
-            ctx.fillStyle = pColorStr;
-            ctx.shadowBlur = 5 * zScale;
-            ctx.shadowColor = pColorStr;
-        }
-        
-        ctx.fill();
-        ctx.shadowBlur = 0; // Reset
+        // Dibujar el punto pre-renderizado desde el offscreen canvas
+        ctx.globalAlpha = alpha;
+        // Restar la mitad del ancho del sprite para centrarlo exactamente en (x,y)
+        ctx.drawImage(sprite, this.x - sprite.width / 2, this.y - sprite.height / 2);
     }
 }
 
-// Inicializar partículas (Core + Bandas)
-function initParticles() {
-    particles.length = 0;
-    // 5% de partículas para el núcleo central vibrante
-    for (let i = 0; i < NUM_PARTICLES; i++) {
-        particles.push(new Particle(i < NUM_PARTICLES * 0.05));
+// Generar Sprites Offscreen para no destruir CPU con shadowBlur en cada frame
+function preRenderGlowSprites(colR, colG, colB) {
+    glowSprites = [];
+    const colorStr = `rgb(${colR}, ${colG}, ${colB})`;
+    lastRenderedColorStr = colorStr;
+
+    for (let i = 0; i < glowLevels; i++) {
+        // i=0 es la energía más baja, i=glowLevels-1 la más alta (Drop)
+        const intensity = i / (glowLevels - 1); // 0 a 1
+        
+        // Canvas oculto temporal
+        const offCanvas = document.createElement('canvas');
+        const padding = 40; // Espacio necesario para no cortar el glow
+        // El tamaño máximo del punto reaccionando
+        const maxRadius = 3 + (intensity * 4); 
+        
+        offCanvas.width = maxRadius * 2 + padding * 2;
+        offCanvas.height = maxRadius * 2 + padding * 2;
+        const offCtx = offCanvas.getContext('2d');
+
+        const cx = offCanvas.width / 2;
+        const cy = offCanvas.height / 2;
+
+        offCtx.beginPath();
+        offCtx.arc(cx, cy, maxRadius, 0, Math.PI * 2);
+        
+        // Puntos apagados (intensidad=0) son grises oscuros
+        if (intensity === 0) {
+            offCtx.fillStyle = 'rgba(50, 50, 50, 0.5)';
+        } else {
+            // El color brilla más y se vuelve blanco en picos máximos
+            const isKick = intensity > 0.8;
+            offCtx.fillStyle = isKick ? '#ffffff' : colorStr;
+            // Blur aumenta con la intensidad
+            offCtx.shadowBlur = 5 + (intensity * 30);
+            offCtx.shadowColor = colorStr;
+        }
+
+        offCtx.fill();
+        glowSprites.push(offCanvas);
+    }
+}
+
+function initGrid() {
+    docs = [];
+    cols = Math.floor(canvas.width / GRID_SPACING);
+    rows = Math.floor(canvas.height / GRID_SPACING);
+
+    const offsetX = (canvas.width - (cols * GRID_SPACING)) / 2 + (GRID_SPACING/2);
+    const offsetY = (canvas.height - (rows * GRID_SPACING)) / 2 + (GRID_SPACING/2);
+
+    const centerX = cols / 2;
+    const centerY = rows / 2;
+    const maxManhattan = Math.abs(0 - centerX) + Math.abs(0 - centerY); // Máxima distancia posible
+
+    for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+            const x = offsetX + col * GRID_SPACING;
+            const y = offsetY + row * GRID_SPACING;
+            docs.push(new Dot(col, row, x, y, maxManhattan));
+        }
     }
 }
 
 function resizeCanvas() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-    if (particles.length === 0) initParticles();
+    initGrid();
+    preRenderGlowSprites(0, 255, 255); // Inicial
 }
 
 window.addEventListener('resize', resizeCanvas);
@@ -189,53 +245,9 @@ function draw() {
 
     analyser.getByteFrequencyData(dataArray);
 
-    // Efecto de estela de luz (Motion blur fluido)
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)'; // El .2 controla qué tanto dura la estela
+    // Fondo OLED Negro puro, sin rastro (motion blur era genal para partículas, pero no para rejilla geométrica)
+    ctx.fillStyle = '#000000'; 
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const centerX = canvas.width / 2;
-    const centerY = canvas.height / 2;
-
-    // Calcular la intensidad por rangos de frecuencia (Segmentación)
-    // Con fftSize = 2048, cada índice (bin) abarca aprox ~21.5 Hz
-    
-    // Bajos (Bass): Índices 0 a 10 (aprox. 0 - 215 Hz)
-    let bassAvg = 0;
-    for (let i = 0; i <= 10; i++) {
-        bassAvg += dataArray[i];
-    }
-    bassAvg = bassAvg / 11;
-
-    // Medios (Mids): Índices 11 a 50 (aprox. 236 - 1075 Hz)
-    let midsAvg = 0;
-    for (let i = 11; i <= 50; i++) {
-        midsAvg += dataArray[i];
-    }
-    midsAvg = midsAvg / 40;
-
-    // Agudos (Treble): Índices 51 a 250 (aprox. 1096 - 5375 Hz)
-    // No iteramos hasta el final para optimizar rendimiento ya que rara vez hay información útil muy arriba
-    let trebleAvg = 0;
-    for (let i = 51; i <= 250; i++) {
-        trebleAvg += dataArray[i];
-    }
-    trebleAvg = trebleAvg / 200;
-    
-    // --- SISTEMA DE PARTÍCULAS / VÓRTICE 3D ---
-    
-    // Detectar golpe fuerte de bajo (Kick)
-    if (bassAvg > 180 && bassAvg - lastBass > 20) {
-        bassShockwave = 50; // Iniciar onda expansiva cerca del núcleo
-    }
-    lastBass = bassAvg;
-
-    // Expandir onda de choque
-    if (bassShockwave > 0) {
-        bassShockwave += 10 + (bassAvg / 10); // Expande hacia afuera
-        if (bassShockwave > canvas.width) bassShockwave = 0; // Reset cuando sale de vista
-    }
-
-    const isCoreExploding = bassAvg > 200;
 
     // --- MODO AMBIENTE Y COLOR DINÁMICO ---
 
@@ -251,34 +263,41 @@ function draw() {
 
     // Obtener color objetivo y aplicar suavizado a currentAmbientColor
     const targetColor = interpolateColor(normalizedEnergy);
-    // Suavizamos el cambio de color (0.05 de interpolación lineal por frame)
-    currentAmbientColor.r = lerp(currentAmbientColor.r, targetColor.r, 0.05);
-    currentAmbientColor.g = lerp(currentAmbientColor.g, targetColor.g, 0.05);
-    currentAmbientColor.b = lerp(currentAmbientColor.b, targetColor.b, 0.05);
+    // Interpolación muy suave para efecto chill/ambiente
+    currentAmbientColor.r = lerp(currentAmbientColor.r, targetColor.r, 0.03);
+    currentAmbientColor.g = lerp(currentAmbientColor.g, targetColor.g, 0.03);
+    currentAmbientColor.b = lerp(currentAmbientColor.b, targetColor.b, 0.03);
 
     const rStr = Math.round(currentAmbientColor.r);
     const gStr = Math.round(currentAmbientColor.g);
     const bStr = Math.round(currentAmbientColor.b);
-    const ambientColorStr = `rgb(${rStr}, ${gStr}, ${bStr})`;
+    
+    // Verifica si el cambio de color es suficientemente grande para justificar re-renderizar los sprites Offscreen
+    // Renderizar demasiados canas offscreen da bajones de FPS
+    const colorRep = `rgb(${rStr}, ${gStr}, ${bStr})`;
+    if (colorRep !== lastRenderedColorStr) {
+        // Reducir la frecuencia de actualización para rendimiento a costa de una sutil compresión de color
+        // Solo actualizamos el set de sprites si cambia visiblemente la matriz RGB
+        // Por la forma en que redondeamos, se actualizará cada que el int RGB cambie.
+        preRenderGlowSprites(rStr, gStr, bStr);
+    }
 
-    // Dibujar núcleo central principal (fondo glow detrás de partículas)
-    const coreRadius = 30 + (bassAvg * 0.8);
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, coreRadius, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${rStr}, ${gStr}, ${bStr}, ${0.1 + (bassAvg / 500)})`;
-    ctx.shadowBlur = 50 + bassAvg;
-    ctx.shadowColor = ambientColorStr;
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    // --- TRANSICIÓN DE MODOS (Diamante vs Cheurón) ---
+    modeTimer++;
+    // Cambiar de modo aproximadamente cada 15 segundos (15s * ~60fps = 900 frames)
+    // O cuando hay un "drop" inmenso y ha pasado un rato prudente (400 frames mínimo)
+    if (modeTimer > 900 || (normalizedEnergy > 0.85 && modeTimer > 400)) {
+        mode = mode === 'diamond' ? 'chevron' : 'diamond';
+        modeTimer = 0;
+    }
 
-    // Actualizar y dibujar todas las partículas
-    particles.forEach(p => {
-        const { currentDistance } = p.update(midsAvg, trebleAvg, bassAvg, bassShockwave);
-        
-        // Simular Proyección 3D (z -> zScale)
-        // Partículas con z cerca de 0 están "cerca", z alrededor de 1000 están "lejos"
-        const zScale = 200 / (200 + p.z);
-        
-        p.draw(ctx, centerX, centerY, currentDistance, zScale, isCoreExploding, ambientColorStr, currentAmbientColor);
-    });
+    // Actualizar y dibujar rejilla
+    const ctxGlobalAlphaCache = ctx.globalAlpha; // Restaurar después
+
+    for (let i = 0; i < docs.length; i++) {
+        docs[i].update(dataArray, normalizedEnergy, mode);
+        docs[i].draw(ctx, glowSprites);
+    }
+
+    ctx.globalAlpha = ctxGlobalAlphaCache; // Reset
 }
