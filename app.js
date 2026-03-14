@@ -8,9 +8,102 @@ let source;
 let dataArray;
 let animationId;
 
+// --- Configuración del Sistema de Partículas ---
+const particles = [];
+const NUM_PARTICLES = 3000;
+let bassShockwave = 0; // Ondas de choque
+let lastBass = 0; // Para detectar "golpes" de bajo
+
+class Particle {
+    constructor(isCore = false) {
+        this.isCore = isCore;
+        this.reset();
+        // Distribuir partículas inicialmente
+        this.angle = Math.random() * Math.PI * 2;
+        this.distance = isCore ? Math.random() * 50 : 50 + Math.random() * 500;
+        this.z = Math.random() * 1000; // Profundidad simulada
+    }
+
+    reset() {
+        this.angle = Math.random() * Math.PI * 2;
+        // El núcleo está en el centro, las bandas se distribuyen hacia afuera
+        this.distance = this.isCore ? Math.random() * 40 : 80 + Math.random() * (canvas.width / 1.5);
+        this.baseDistance = this.distance;
+        this.speed = (Math.random() * 0.02) + 0.005;
+        this.z = 1000; // Manda la partícula "lejos" para el efecto túnel
+        
+        // Tonos magenta fucsia y morado profundo para las bandas
+        const hue = 280 + Math.random() * 40; // 280-320 (Morado a Magenta/Fucsia)
+        const lightness = 40 + Math.random() * 30;
+        this.color = `hsl(${hue}, 100%, ${lightness}%)`;
+    }
+
+    update(midsAvg, trebleAvg, bassAvg, shockwave) {
+        // Velocidad de rotación base + alteración por Mids (Voces/Melodías)
+        this.angle += (this.speed * (1 + (midsAvg / 100)));
+
+        // Acercar partículas hacia la cámara (efecto túnel)
+        this.z -= (5 + (trebleAvg / 10)); 
+        if (this.z <= 0) this.reset();
+
+        // Expansión y ondas de choque (Bass)
+        let currentDistance = this.baseDistance;
+        
+        if (!this.isCore) {
+            // Ondulación/vibración basada en altos y medios
+            const vibration = Math.sin(this.angle * 10) * (trebleAvg / 5);
+            
+            // Reemplazo a bandas concéntricas afectadas por la onda de choque
+            // Si la partícula está cerca del radio de la onda, empujarla hacia afuera
+            const shockwaveEffect = Math.max(0, 100 - Math.abs(currentDistance - shockwave)) / 100;
+            const push = shockwaveEffect * (bassAvg * 1.5);
+            
+            currentDistance += vibration + push;
+        }
+
+        return { currentDistance };
+    }
+
+    draw(ctx, centerX, centerY, currentDistance, zScale, isCoreExploding) {
+        const px = centerX + Math.cos(this.angle) * currentDistance * zScale;
+        const py = centerY + Math.sin(this.angle) * currentDistance * zScale;
+        
+        // Tamaño simulado por perspectiva 3D
+        const size = (this.isCore ? 3 : 1.5) * zScale;
+
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(0.1, size), 0, Math.PI * 2);
+
+        if (this.isCore) {
+            // Centro Cyan que pulsa intensamente
+            ctx.fillStyle = isCoreExploding ? '#fff' : '#00ffff'; 
+            ctx.shadowBlur = 15 * zScale;
+            ctx.shadowColor = '#00ffff';
+        } else {
+            // Bandas de vórtice
+            ctx.fillStyle = this.color;
+            ctx.shadowBlur = 5 * zScale;
+            ctx.shadowColor = this.color;
+        }
+        
+        ctx.fill();
+        ctx.shadowBlur = 0; // Reset
+    }
+}
+
+// Inicializar partículas (Core + Bandas)
+function initParticles() {
+    particles.length = 0;
+    // 5% de partículas para el núcleo central vibrante
+    for (let i = 0; i < NUM_PARTICLES; i++) {
+        particles.push(new Particle(i < NUM_PARTICLES * 0.05));
+    }
+}
+
 function resizeCanvas() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
+    if (particles.length === 0) initParticles();
 }
 
 window.addEventListener('resize', resizeCanvas);
@@ -53,8 +146,8 @@ function draw() {
 
     analyser.getByteFrequencyData(dataArray);
 
-    // Efecto de rastro (trail) en lugar de limpiar completamente el canvas
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+    // Efecto de estela de luz (Motion blur fluido)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)'; // El .2 controla qué tanto dura la estela
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const centerX = canvas.width / 2;
@@ -85,61 +178,40 @@ function draw() {
     }
     trebleAvg = trebleAvg / 200;
     
-    // --- DIBUJADO BASADO EN FRECUENCIAS ---
-
-    // BASS: Radio base + aumento reactivo al bajo (Pulso principal)
-    const radius = 80 + (bassAvg * 1.5);
-
-    // MIDS: Lo usamos para rotación del canvas
-    // Guardamos el estado actual del canvas antes de rotar
-    ctx.save();
-    ctx.translate(centerX, centerY);
-    // Rotación sutil basada en los medios
-    const rotation = (midsAvg / 255) * Math.PI; 
-    ctx.rotate(rotation);
-    // Como rotamos sobre el centro, dibujaremos en (0,0) relativo
+    // --- SISTEMA DE PARTÍCULAS / VÓRTICE 3D ---
     
-    // Dibujar el círculo principal pulsante (reactivo al Bass)
+    // Detectar golpe fuerte de bajo (Kick)
+    if (bassAvg > 180 && bassAvg - lastBass > 20) {
+        bassShockwave = 50; // Iniciar onda expansiva cerca del núcleo
+    }
+    lastBass = bassAvg;
+
+    // Expandir onda de choque
+    if (bassShockwave > 0) {
+        bassShockwave += 10 + (bassAvg / 10); // Expande hacia afuera
+        if (bassShockwave > canvas.width) bassShockwave = 0; // Reset cuando sale de vista
+    }
+
+    const isCoreExploding = bassAvg > 200;
+
+    // Dibujar núcleo central principal (fondo glow detrás de partículas)
+    const coreRadius = 30 + (bassAvg * 0.8);
     ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, 2 * Math.PI);
-    ctx.strokeStyle = `hsl(180, 100%, ${50 + (bassAvg / 255) * 50}%)`; // Cyan brillante reactivo
-    ctx.lineWidth = 5 + (bassAvg / 30);
-    ctx.shadowBlur = 20 + (bassAvg / 10);
-    ctx.shadowColor = ctx.strokeStyle;
-    ctx.stroke();
+    ctx.arc(centerX, centerY, coreRadius, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(0, 255, 255, ${0.1 + (bassAvg / 500)})`;
+    ctx.shadowBlur = 50 + bassAvg;
+    ctx.shadowColor = '#00ffff';
+    ctx.fill();
+    ctx.shadowBlur = 0;
 
-    // Dibujar círculos concéntricos secundarios (combinando Bass y rotación de Mids)
-    for (let i = 1; i <= 3; i++) {
-        const offsetRadius = radius + (i * 60) + (bassAvg * 0.5);
-        ctx.beginPath();
-        // Agregamos rotación extra o forma pseudo-elíptica basada en los medios
-        ctx.arc(0, 0, offsetRadius, 0, 2 * Math.PI);
-        ctx.strokeStyle = `hsla(300, 100%, 60%, ${0.5 - (i * 0.1) + (bassAvg / 500)})`; // Magenta
-        ctx.lineWidth = 2 + (bassAvg / 100);
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = ctx.strokeStyle;
-        ctx.stroke();
-    }
-    
-    // Restaurar transformación (deshacer rotación y traslación) para otros elementos
-    ctx.restore();
-
-    // TREBLE: Destellos o partículas pequeñas en posiciones aleatorias de la circunferencia
-    if (trebleAvg > 50) { // Umbral para que no haya destellos siempre
-        const numParticles = Math.floor(trebleAvg / 10);
-        for(let i = 0; i < numParticles; i++) {
-            const angle = Math.random() * Math.PI * 2;
-            const particleDirDist = radius + 100 + (Math.random() * 150); // Mínimo fuera del centro
-            
-            const px = centerX + Math.cos(angle) * particleDirDist;
-            const py = centerY + Math.sin(angle) * particleDirDist;
-
-            ctx.beginPath();
-            ctx.arc(px, py, 1 + (Math.random() * 3), 0, 2 * Math.PI);
-            ctx.fillStyle = `rgba(255, 255, 255, ${trebleAvg / 255})`;
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = 'white';
-            ctx.fill();
-        }
-    }
+    // Actualizar y dibujar todas las partículas
+    particles.forEach(p => {
+        const { currentDistance } = p.update(midsAvg, trebleAvg, bassAvg, bassShockwave);
+        
+        // Simular Proyección 3D (z -> zScale)
+        // Partículas con z cerca de 0 están "cerca", z alrededor de 1000 están "lejos"
+        const zScale = 200 / (200 + p.z);
+        
+        p.draw(ctx, centerX, centerY, currentDistance, zScale, isCoreExploding);
+    });
 }
