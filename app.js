@@ -24,6 +24,10 @@ const colorRamp = [
     { threshold: 1.0, r: 255, g: 255, b: 255 }   // Blanco puro (Drop brutal)
 ];
 
+// Array de Hue Shifts para los Sprites pre-renderizados
+// Pre-calcularemos 6 versiones tonales: 0 (Color Base) a 5 (Color Drop Máximo)
+const COLOR_VARIANTS = 6;
+
 function interpolateColor(energy) {
     let c1 = colorRamp[0];
     let c2 = colorRamp[colorRamp.length - 1];
@@ -43,6 +47,15 @@ function interpolateColor(energy) {
         r: lerp(c1.r, c2.r, localAmt),
         g: lerp(c1.g, c2.g, localAmt),
         b: lerp(c1.b, c2.b, localAmt)
+    };
+}
+
+// Función auxiliar para forzar tinte RGB hacia otra paleta
+function mixColorsRGB(c1, c2, amt) {
+    return {
+        r: lerp(c1.r, c2.r, amt),
+        g: lerp(c1.g, c2.g, amt),
+        b: lerp(c1.b, c2.b, amt)
     };
 }
 
@@ -161,21 +174,25 @@ class Dot {
         const energyIndex = Math.min(this.vis.glowLevels - 1, Math.floor(this.currentSize * this.vis.glowLevels));
         if (energyIndex < 0) return;
 
-        // Efecto Parallax / Layering (Profundidad) 
-        // Generamos un coeficiente de profundidad donde Z-negativo (lejos) es 0, y Z-positivo (cerca) es 1
+        // Color-Shift Dinámico Local (La onda de bajo arrastra color)
+        // El offset de color depende de la masa elástica actual del punto (currentSize)
+        // Los puntos grandes (onda activa) cambian su tono hacia el rojo/blanco (variantes altas)
+        let colorVariantIdx = Math.floor(this.currentSize * (COLOR_VARIANTS - 1));
+        if (colorVariantIdx > COLOR_VARIANTS - 1) colorVariantIdx = COLOR_VARIANTS - 1;
+        if (colorVariantIdx < 0) colorVariantIdx = 0;
+
         const depthNorm = (this.currentZ + this.maxRadius) / (this.maxRadius * 2); 
         
-        // Los puntos lejanos son más tenues. Este es el efecto Parallax Inmersivo real 3D
         let alpha = 0.05 + (depthNorm * 0.4) + (this.currentSize * 0.5);
         if (alpha > 1) alpha = 1;
         if (alpha < 0) alpha = 0;
 
-        const sprite = this.vis.glowSprites[energyIndex];
+        // Seleccionamos el Sprite desde la Matriz 2D [VariacionDeColor][Intensidad]
+        const sprite = this.vis.glowSprites[colorVariantIdx][energyIndex];
         if (!sprite) return;
 
         ctx.globalAlpha = alpha;
         
-        // Escalar por perspectiva para que los puntos lejanos se vean más pequeños físicamente
         const dimW = sprite.width * this.scale;
         const dimH = sprite.height * this.scale;
 
@@ -262,49 +279,61 @@ class AudioVisualizer {
     }
 
     preRenderGlowSprites(colR, colG, colB) {
-        this.glowSprites = [];
-        const colorStr = `rgb(${colR}, ${colG}, ${colB})`;
-        this.lastRenderedColorStr = colorStr;
+        this.glowSprites = []; // Será un array 2D
+        this.lastRenderedColorStr = `rgb(${colR}, ${colG}, ${colB})`;
+        const baseColor = { r: colR, g: colG, b: colB };
+        const peakColor = { r: 255, g: 50, b: 0 }; // Rojo ardiente para los picos máximos
 
-        for (let i = 0; i < this.glowLevels; i++) {
-            const intensity = i / (this.glowLevels - 1); 
-            const offCanvas = document.createElement('canvas');
-            const padding = 40; 
-            const maxRadius = 3 + (intensity * 4); 
-            
-            offCanvas.width = maxRadius * 2 + padding * 2;
-            offCanvas.height = maxRadius * 2 + padding * 2;
-            const offCtx = offCanvas.getContext('2d');
+        // Generar Sprites para varias Variantes Tenebrosas (Shift Hacia Rojo/Blanco)
+        for(let v = 0; v < COLOR_VARIANTS; v++) {
+            const arrNiveles = [];
+            // Mezclamos el color base (escuchando el chill de la canción) hacia el rojo ardiente
+            const shiftAmt = v / (COLOR_VARIANTS - 1); // 0 a 1
+            const varColor = mixColorsRGB(baseColor, peakColor, shiftAmt);
+            const varColorStr = `rgb(${Math.round(varColor.r)}, ${Math.round(varColor.g)}, ${Math.round(varColor.b)})`;
 
-            const cx = offCanvas.width / 2;
-            const cy = offCanvas.height / 2;
+            for (let i = 0; i < this.glowLevels; i++) {
+                const intensity = i / (this.glowLevels - 1); 
+                const offCanvas = document.createElement('canvas');
+                const padding = 40; 
+                // Sprites ligeramente más grandes para compensar la separación mayor entre puntos de la cuadrícula
+                const maxRadius = 4 + (intensity * 6); 
+                
+                offCanvas.width = maxRadius * 2 + padding * 2;
+                offCanvas.height = maxRadius * 2 + padding * 2;
+                const offCtx = offCanvas.getContext('2d');
 
-            offCtx.beginPath();
-            offCtx.arc(cx, cy, maxRadius, 0, Math.PI * 2);
-            
-            if (intensity === 0) {
-                // Color blanco o gris tenue para hacer visible la cuadrícula incluso sin música
-                offCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-            } else {
-                const isKick = intensity > 0.8;
-                offCtx.fillStyle = isKick ? '#ffffff' : colorStr;
-                offCtx.shadowBlur = 5 + (intensity * 30);
-                offCtx.shadowColor = colorStr;
+                const cx = offCanvas.width / 2;
+                const cy = offCanvas.height / 2;
+
+                offCtx.beginPath();
+                offCtx.arc(cx, cy, maxRadius, 0, Math.PI * 2);
+                
+                // Color inactivo: Apenas visible pero sin aura para estructura base (Gris Translúcido)
+                if (intensity === 0) {
+                    offCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                } else {
+                    const isKick = (intensity > 0.8) && (v > 3); // Solo blanco si es alta intensidad Y alta variante
+                    offCtx.fillStyle = isKick ? '#ffffff' : varColorStr;
+                    offCtx.shadowBlur = 5 + (intensity * 30);
+                    offCtx.shadowColor = varColorStr;
+                }
+
+                offCtx.fill();
+                arrNiveles.push(offCanvas);
             }
-
-            offCtx.fill();
-            this.glowSprites.push(offCanvas);
+            this.glowSprites.push(arrNiveles);
         }
     }
 
     initGrid() {
         this.dots = [];
         
-        // Mapeo Esférico basado en Secuencia de Fibonacci para distribuir puntos uniformemente
-        const numDots = 1500; // Gran cantidad de puntos para una esfera fluida 3D
-        // El radio es más o menos el 45% del tamaño más pequeño de la pantalla
+        // Se reduce drásticamente el número de puntos de 1500 a 700
+        // Esto separa la cuadrícula permitiendo vislumbrar mejor las estelas de "vibración de ondas"
+        const numDots = 700; 
         const radius = Math.min(this.canvas.width, this.canvas.height) * 0.45; 
-        const phi = Math.PI * (3 - Math.sqrt(5)); // Golden angle
+        const phi = Math.PI * (3 - Math.sqrt(5)); 
 
         for (let i = 0; i < numDots; i++) {
             // Y va de 1 a -1 (polo norte a polo sur)
