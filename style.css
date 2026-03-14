@@ -9,6 +9,8 @@ body, html {
     justify-content: center;
     align-items: center;
     font-family: 'Inter', sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 #start-btn {

@@ -405,6 +405,12 @@ const viz = new AudioVisualizer(canvas, ctx);
 
 // --- INTERFAZ USUARIO ---
 startBtn.addEventListener('click', async () => {
+    // 1. Solicitamos pantalla completa INMEDIATAMENTE al hacer clic
+    // (Si lo hacemos después de getDisplayMedia, el navegador lo bloquea por seguridad)
+    if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(err => console.log("Fullscreen error:", err));
+    }
+
     try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ 
             video: true, 
@@ -417,11 +423,6 @@ startBtn.addEventListener('click', async () => {
         
         startBtn.style.display = 'none'; 
         viz.initAudio(stream);
-
-        // Solicitar Pantalla Completa para máxima inmersión
-        if (document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch(err => console.log("Fullscreen error:", err));
-        }
 
     } catch (err) {
         console.error('Error al acceder al audio del sistema:', err);
