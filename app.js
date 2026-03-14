@@ -114,12 +114,24 @@ class Dot {
         // --- 1.8 Efecto NCS (Topología Vectorial 3D de Desplazamiento) ---
         // Extraemos la frecuencia de audio Pura (bajos a agudos) guiada por el Index 
         // de este polvo cósmico particular para generar su Valle/Pico específico
-        const audioTopo = (this.vis.smoothedDataArray[dataIndex] / 255.0); 
+        let audioTopo = (this.vis.smoothedDataArray[dataIndex] / 255.0); 
+
+        // Atenuador de Frecuencias Medias (Voces): 
+        // Si el punto está leyendo frecuencias entre bajos y agudos altos (aprox índices 15 a 70),
+        // reducimos violentamente su sensibilidad en un 70%. Esto elimina el comportamiento "nervioso"
+        // que provocan las vocales mantenidas en la tela de la esfera.
+        if (dataIndex > 15 && dataIndex < 70) {
+            audioTopo *= 0.3; 
+        }
+
+        // Aplicamos una curva exponencial. Solo un sonido fuerte generará verdaderos picos.
+        // Los sonidos de fondo silencioso apenas moverán la superficie.
+        audioTopo = Math.pow(audioTopo, 1.3);
 
         // Generamos un campo gravitacional que empuja fuera la coordenada tridimensional XYZ local.
         // Combinamos la física del "waveSine", la estática del "audioTopo" y un multiplicador
         // Multiplicado por *centerFactor*, el efecto colapsa en los bordes formando un Anillo Circular Limpio
-        let pushDisplacement = (audioTopo * 0.7) + (waveSine * 0.5);
+        let pushDisplacement = (audioTopo * 0.6) + (waveSine * 0.3);
         if (pushDisplacement < 0) pushDisplacement = 0;
         
         let displacementMagnitude = pushDisplacement * 1.5 * centerFactor;
