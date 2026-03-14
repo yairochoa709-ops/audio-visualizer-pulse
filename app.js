@@ -8,6 +8,42 @@ let source;
 let dataArray;
 let animationId;
 
+// --- Paleta de Colores Dinámica ---
+let currentAmbientColor = { r: 0, g: 255, b: 255 }; // Empieza en cyan
+const colorRamp = [
+    { threshold: 0.0, r: 0, g: 50, b: 255 },     // Azul profundo (Quiet)
+    { threshold: 0.3, r: 0, g: 200, b: 255 },    // Cian suave
+    { threshold: 0.6, r: 200, g: 0, b: 255 },    // Magenta / Morado (Build-up)
+    { threshold: 0.8, r: 255, g: 20, b: 147 },   // Rosa eléctrico
+    { threshold: 1.0, r: 255, g: 80, b: 0 }      // Oro/Naranja/Rojo (Drop)
+];
+
+function lerp(start, end, amt) {
+    return (1 - amt) * start + amt * end;
+}
+
+function interpolateColor(energy) {
+    let c1 = colorRamp[0];
+    let c2 = colorRamp[colorRamp.length - 1];
+    
+    for (let i = 0; i < colorRamp.length - 1; i++) {
+        if (energy >= colorRamp[i].threshold && energy <= colorRamp[i+1].threshold) {
+            c1 = colorRamp[i];
+            c2 = colorRamp[i+1];
+            break;
+        }
+    }
+    
+    let range = c2.threshold - c1.threshold;
+    let localAmt = range === 0 ? 0 : (energy - c1.threshold) / range;
+    
+    return {
+        r: lerp(c1.r, c2.r, localAmt),
+        g: lerp(c1.g, c2.g, localAmt),
+        b: lerp(c1.b, c2.b, localAmt)
+    };
+}
+
 // --- Configuración del Sistema de Partículas ---
 const particles = [];
 const NUM_PARTICLES = 3000;
@@ -32,10 +68,8 @@ class Particle {
         this.speed = (Math.random() * 0.02) + 0.005;
         this.z = 1000; // Manda la partícula "lejos" para el efecto túnel
         
-        // Tonos magenta fucsia y morado profundo para las bandas
-        const hue = 280 + Math.random() * 40; // 280-320 (Morado a Magenta/Fucsia)
-        const lightness = 40 + Math.random() * 30;
-        this.color = `hsl(${hue}, 100%, ${lightness}%)`;
+        // Variación de oscuridad para dar profundidad al vórtice
+        this.darkenOffset = 20 + Math.random() * 50; 
     }
 
     update(midsAvg, trebleAvg, bassAvg, shockwave) {
@@ -64,7 +98,7 @@ class Particle {
         return { currentDistance };
     }
 
-    draw(ctx, centerX, centerY, currentDistance, zScale, isCoreExploding) {
+    draw(ctx, centerX, centerY, currentDistance, zScale, isCoreExploding, ambientColorStr, ambientColor) {
         const px = centerX + Math.cos(this.angle) * currentDistance * zScale;
         const py = centerY + Math.sin(this.angle) * currentDistance * zScale;
         
@@ -75,15 +109,20 @@ class Particle {
         ctx.arc(px, py, Math.max(0.1, size), 0, Math.PI * 2);
 
         if (this.isCore) {
-            // Centro Cyan que pulsa intensamente
-            ctx.fillStyle = isCoreExploding ? '#fff' : '#00ffff'; 
+            // Centro que pulsa intensamente
+            ctx.fillStyle = isCoreExploding ? '#fff' : ambientColorStr; 
             ctx.shadowBlur = 15 * zScale;
-            ctx.shadowColor = '#00ffff';
+            ctx.shadowColor = ambientColorStr;
         } else {
-            // Bandas de vórtice
-            ctx.fillStyle = this.color;
+            // Bandas de vórtice basadas en el color ambiente actual
+            const pr = Math.max(0, ambientColor.r - this.darkenOffset);
+            const pg = Math.max(0, ambientColor.g - this.darkenOffset);
+            const pb = Math.max(0, ambientColor.b - this.darkenOffset);
+            const pColorStr = `rgb(${pr}, ${pg}, ${pb})`;
+
+            ctx.fillStyle = pColorStr;
             ctx.shadowBlur = 5 * zScale;
-            ctx.shadowColor = this.color;
+            ctx.shadowColor = pColorStr;
         }
         
         ctx.fill();
@@ -194,13 +233,37 @@ function draw() {
 
     const isCoreExploding = bassAvg > 200;
 
+    // --- MODO AMBIENTE Y COLOR DINÁMICO ---
+
+    // Calcular intensidad total (Energía RMS o promedio)
+    let totalEnergy = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+        totalEnergy += dataArray[i];
+    }
+    const avgEnergy = totalEnergy / dataArray.length;
+    
+    // Normalizar a 0-1 (usualmente 128 es un volumen bastante alto)
+    const normalizedEnergy = Math.min(1.0, Math.max(0.0, avgEnergy / 128.0)); 
+
+    // Obtener color objetivo y aplicar suavizado a currentAmbientColor
+    const targetColor = interpolateColor(normalizedEnergy);
+    // Suavizamos el cambio de color (0.05 de interpolación lineal por frame)
+    currentAmbientColor.r = lerp(currentAmbientColor.r, targetColor.r, 0.05);
+    currentAmbientColor.g = lerp(currentAmbientColor.g, targetColor.g, 0.05);
+    currentAmbientColor.b = lerp(currentAmbientColor.b, targetColor.b, 0.05);
+
+    const rStr = Math.round(currentAmbientColor.r);
+    const gStr = Math.round(currentAmbientColor.g);
+    const bStr = Math.round(currentAmbientColor.b);
+    const ambientColorStr = `rgb(${rStr}, ${gStr}, ${bStr})`;
+
     // Dibujar núcleo central principal (fondo glow detrás de partículas)
     const coreRadius = 30 + (bassAvg * 0.8);
     ctx.beginPath();
     ctx.arc(centerX, centerY, coreRadius, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(0, 255, 255, ${0.1 + (bassAvg / 500)})`;
+    ctx.fillStyle = `rgba(${rStr}, ${gStr}, ${bStr}, ${0.1 + (bassAvg / 500)})`;
     ctx.shadowBlur = 50 + bassAvg;
-    ctx.shadowColor = '#00ffff';
+    ctx.shadowColor = ambientColorStr;
     ctx.fill();
     ctx.shadowBlur = 0;
 
@@ -212,6 +275,6 @@ function draw() {
         // Partículas con z cerca de 0 están "cerca", z alrededor de 1000 están "lejos"
         const zScale = 200 / (200 + p.z);
         
-        p.draw(ctx, centerX, centerY, currentDistance, zScale, isCoreExploding);
+        p.draw(ctx, centerX, centerY, currentDistance, zScale, isCoreExploding, ambientColorStr, currentAmbientColor);
     });
 }
