@@ -264,7 +264,8 @@ class AudioVisualizer {
             offCtx.arc(cx, cy, maxRadius, 0, Math.PI * 2);
             
             if (intensity === 0) {
-                offCtx.fillStyle = 'rgba(50, 50, 50, 0.5)';
+                // Color blanco o gris tenue para hacer visible la cuadrícula incluso sin música
+                offCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
             } else {
                 const isKick = intensity > 0.8;
                 offCtx.fillStyle = isKick ? '#ffffff' : colorStr;
