@@ -105,6 +105,14 @@ class Dot {
             audioPush = (audioVal * 0.25) + (this.vis.normalizedEnergy * 0.4) + Math.max(0, waveSine);
         }
 
+        // --- 1.5 Control Focal (Centro vs Bordes) ---
+        // rad2D nos dice si el punto está dibujándose en el centro o en los bordes por la proyección 2D
+        const rad2D = Math.sqrt(this.currentX * this.currentX + this.currentY * this.currentY);
+        this.edgeFactor = Math.min(1.0, rad2D / this.maxRadius); // 0 = Centro, 1 = Borde
+        
+        // Los nodos reducen su aceleración y reacción rítmica hasta un 20% al acercarse al centro
+        audioPush *= (0.8 + 0.2 * this.edgeFactor);
+
         // --- 2. Física Newtoniana (Hooks Law + Damping) ---
         this.acceleration = audioPush;
         this.velocity += this.acceleration;
@@ -175,6 +183,9 @@ class Dot {
         if (alpha > 1) alpha = 1;
         if (alpha < 0) alpha = 0;
 
+        // Atenuar luminosidad hasta un 30% en el centro para resaltar las ondas(bordes) intensamente
+        alpha *= (0.70 + 0.30 * this.edgeFactor);
+
         // Seleccionamos la paleta base del bucle (duración de 3 segundos por Hue, 12 Hues total)
         const progresoColor = Math.abs((this.vis.globalTime / 3.0) % NUM_HUES);
         let hueIdx1 = Math.floor(progresoColor);
@@ -187,8 +198,10 @@ class Dot {
         
         if (!sprite1 || !sprite2) return;
         
-        const dimW = sprite1.width * this.scale;
-        const dimH = sprite1.height * this.scale;
+        // Encoger tamaño paulatinamente hasta un 75% de base a medida que los puntos se aproximan al centro de visión
+        const sizeFactor = 0.75 + (0.25 * this.edgeFactor);
+        const dimW = sprite1.width * this.scale * sizeFactor;
+        const dimH = sprite1.height * this.scale * sizeFactor;
 
         // Dibujamos el primer sprite desvaneciéndose
         ctx.globalAlpha = alpha * (1.0 - blendFactor);
