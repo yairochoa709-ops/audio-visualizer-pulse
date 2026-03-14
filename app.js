@@ -150,18 +150,22 @@ resizeCanvas(); // Ajuste inicial
 
 startBtn.addEventListener('click', async () => {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
+        // Pedimos capturar la pantalla/pestaña con el audio del sistema activado.
+        const stream = await navigator.mediaDevices.getDisplayMedia({ 
+            video: true, // Se suele requerir pedir video para capturar sistema/pestaña
             audio: {
                 echoCancellation: false,
                 noiseSuppression: false,
                 autoGainControl: false
             } 
         });
+        
         startBtn.style.display = 'none'; // Ocultar botón al iniciar
+        
         setupAudio(stream);
     } catch (err) {
-        console.error('Error al acceder al micrófono:', err);
-        alert('No se pudo acceder al micrófono. Por favor, asegúrate de otorgar los permisos necesarios.');
+        console.error('Error al acceder al audio del sistema:', err);
+        alert('No se pudo acceder al audio. Por favor, asegúrate de compartir una pestaña o ventana y de marcar la casilla "Compartir audio".');
     }
 });
 
