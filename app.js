@@ -116,9 +116,9 @@ class Dot {
         if(this.currentSize < 0) this.currentSize = 0; 
 
         // --- 3. Manipulación y Rotación 3D ---
-        const rotY = this.vis.globalTime * 0.5; // Rotación en el eje vertical
-        const rotX = Math.sin(this.vis.globalTime * 0.2) * 0.3; // Cabeceo leve
-        const rotZ = this.vis.globalTime * 0.1;
+        const rotY = this.vis.globalTime * 0.15; // Rotación en el eje vertical súper lenta
+        const rotX = Math.sin(this.vis.globalTime * 0.1) * 0.15; // Cabeceo súper leve y lento
+        const rotZ = this.vis.globalTime * 0.05; // Rotación lateral arrastrada
 
         // Pulso de Escala (La esfera "respira" con los bajos)
         const expandPulse = 1.0 + (this.vis.normalizedBass * 0.3) + pseudoNoise(this.baseX, this.baseY, this.vis.globalTime) * 0.05;
