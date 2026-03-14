@@ -12,42 +12,30 @@ function pseudoNoise(x, y, time) {
     return (Math.sin(x * 0.05 + time) + Math.sin(y * 0.05 + time * 1.5)) * 0.5;
 }
 
-// --- Paleta de Colores Dinámica Ampliada ---
-const colorRamp = [
-    { threshold: 0.0, r: 0, g: 30, b: 255 },     // Azul Medianoche profundo (Quiet)
-    { threshold: 0.15, r: 0, g: 150, b: 255 },   // Azul Cyan
-    { threshold: 0.3, r: 0, g: 255, b: 150 },    // Verde Neón / Esmeralda
-    { threshold: 0.45, r: 150, g: 255, b: 0 },   // Amarillo Lima
-    { threshold: 0.6, r: 255, g: 200, b: 0 },    // Dorado
-    { threshold: 0.75, r: 255, g: 50, b: 150 },  // Fucsia brillante (Build-up)
-    { threshold: 0.9, r: 255, g: 0, b: 50 },     // Rojo Carmesí
-    { threshold: 1.0, r: 255, g: 255, b: 255 }   // Blanco puro (Drop brutal)
-];
-
-// Array de Hue Shifts para los Sprites pre-renderizados
-// Pre-calcularemos 6 versiones tonales: 0 (Color Base) a 5 (Color Drop Máximo)
 const COLOR_VARIANTS = 6;
+const NUM_HUES = 12; // 12 Colores en bucle
 
-function interpolateColor(energy) {
-    let c1 = colorRamp[0];
-    let c2 = colorRamp[colorRamp.length - 1];
-    
-    for (let i = 0; i < colorRamp.length - 1; i++) {
-        if (energy >= colorRamp[i].threshold && energy <= colorRamp[i+1].threshold) {
-            c1 = colorRamp[i];
-            c2 = colorRamp[i+1];
-            break;
-        }
+// Función para convertir HSL a RGB para los sprites
+function hslToRgb(h, s, l) {
+    let r, g, b;
+    if (s === 0) {
+        r = g = b = l; 
+    } else {
+        const hue2rgb = (p, q, t) => {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1 / 6) return p + (q - p) * 6 * t;
+            if (t < 1 / 2) return q;
+            if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+            return p;
+        };
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1 / 3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1 / 3);
     }
-    
-    let range = c2.threshold - c1.threshold;
-    let localAmt = range === 0 ? 0 : (energy - c1.threshold) / range;
-    
-    return {
-        r: lerp(c1.r, c2.r, localAmt),
-        g: lerp(c1.g, c2.g, localAmt),
-        b: lerp(c1.b, c2.b, localAmt)
-    };
+    return { r: r * 255, g: g * 255, b: b * 255 };
 }
 
 // Función auxiliar para forzar tinte RGB hacia otra paleta
@@ -187,16 +175,28 @@ class Dot {
         if (alpha > 1) alpha = 1;
         if (alpha < 0) alpha = 0;
 
-        // Seleccionamos el Sprite desde la Matriz 2D [VariacionDeColor][Intensidad]
-        const sprite = this.vis.glowSprites[colorVariantIdx][energyIndex];
-        if (!sprite) return;
+        // Seleccionamos la paleta base del bucle (duración de 3 segundos por Hue, 12 Hues total)
+        const progresoColor = Math.abs((this.vis.globalTime / 3.0) % NUM_HUES);
+        let hueIdx1 = Math.floor(progresoColor);
+        let hueIdx2 = (hueIdx1 + 1) % NUM_HUES;
+        let blendFactor = progresoColor - hueIdx1; // De 0.0 a 1.0 (Transición)
 
-        ctx.globalAlpha = alpha;
+        // Obtenemos los 2 Sprites correspondientes para Cross-Fade
+        const sprite1 = this.vis.glowSprites[hueIdx1]?.[colorVariantIdx]?.[energyIndex];
+        const sprite2 = this.vis.glowSprites[hueIdx2]?.[colorVariantIdx]?.[energyIndex];
         
-        const dimW = sprite.width * this.scale;
-        const dimH = sprite.height * this.scale;
+        if (!sprite1 || !sprite2) return;
+        
+        const dimW = sprite1.width * this.scale;
+        const dimH = sprite1.height * this.scale;
 
-        ctx.drawImage(sprite, this.x - dimW / 2, this.y - dimH / 2, dimW, dimH);
+        // Dibujamos el primer sprite desvaneciéndose
+        ctx.globalAlpha = alpha * (1.0 - blendFactor);
+        ctx.drawImage(sprite1, this.x - dimW / 2, this.y - dimH / 2, dimW, dimH);
+
+        // Dibujamos el segundo sprite apareciendo encima 
+        ctx.globalAlpha = alpha * blendFactor;
+        ctx.drawImage(sprite2, this.x - dimW / 2, this.y - dimH / 2, dimW, dimH);
     }
 }
 
@@ -219,9 +219,7 @@ class AudioVisualizer {
         
         // Estética y Rejilla/Esfera
         this.glowLevels = 10;
-        this.glowSprites = [];
-        this.lastRenderedColorStr = '';
-        this.currentAmbientColor = { r: 0, g: 255, b: 255 };
+        this.glowSprites = []; // Será Array 3D
         
         this.dots = [];
         
@@ -242,6 +240,9 @@ class AudioVisualizer {
         // Listeners
         window.addEventListener('resize', this.resizeCanvas.bind(this));
         
+        // Pre-renderizar toda la matriz de colores 3D intensivos (sólo se hace 1 vez)
+        this.preRenderAllGlowSprites();
+
         // Inicializar vacío
         this.resizeCanvas();
     }
@@ -278,51 +279,55 @@ class AudioVisualizer {
         }
     }
 
-    preRenderGlowSprites(colR, colG, colB) {
-        this.glowSprites = []; // Será un array 2D
-        this.lastRenderedColorStr = `rgb(${colR}, ${colG}, ${colB})`;
-        const baseColor = { r: colR, g: colG, b: colB };
-        const peakColor = { r: 255, g: 50, b: 0 }; // Rojo ardiente para los picos máximos
+    preRenderAllGlowSprites() {
+        this.glowSprites = []; // Array 3D: [12 Hues][6 Variants][10 Levels]
+        const peakColor = { r: 255, g: 200, b: 200 }; // Blanco Cálido para los picos de las ondas
 
-        // Generar Sprites para varias Variantes Tenebrosas (Shift Hacia Rojo/Blanco)
-        for(let v = 0; v < COLOR_VARIANTS; v++) {
-            const arrNiveles = [];
-            // Mezclamos el color base (escuchando el chill de la canción) hacia el rojo ardiente
-            const shiftAmt = v / (COLOR_VARIANTS - 1); // 0 a 1
-            const varColor = mixColorsRGB(baseColor, peakColor, shiftAmt);
-            const varColorStr = `rgb(${Math.round(varColor.r)}, ${Math.round(varColor.g)}, ${Math.round(varColor.b)})`;
+        for (let h = 0; h < NUM_HUES; h++) {
+            const arrVariants = [];
+            // Hue de 0 a 1 (0 a 360 grados HSL)
+            const hueBase = h / NUM_HUES;
+            const baseColor = hslToRgb(hueBase, 1.0, 0.5); // Saturación 100%, Brillo 50%
+            
+            for(let v = 0; v < COLOR_VARIANTS; v++) {
+                const arrNiveles = [];
+                // Mezclamos el color base hacia el peakColor de energía (shiftAmt)
+                const shiftAmt = v / (COLOR_VARIANTS - 1); // 0 a 1
+                const maxShiftOpacity = 0.8; // Para no perder el tono base original del todo
+                const varColor = mixColorsRGB(baseColor, peakColor, shiftAmt * maxShiftOpacity); 
+                const varColorStr = `rgb(${Math.round(varColor.r)}, ${Math.round(varColor.g)}, ${Math.round(varColor.b)})`;
 
-            for (let i = 0; i < this.glowLevels; i++) {
-                const intensity = i / (this.glowLevels - 1); 
-                const offCanvas = document.createElement('canvas');
-                const padding = 40; 
-                // Sprites ligeramente más grandes para compensar la separación mayor entre puntos de la cuadrícula
-                const maxRadius = 4 + (intensity * 6); 
-                
-                offCanvas.width = maxRadius * 2 + padding * 2;
-                offCanvas.height = maxRadius * 2 + padding * 2;
-                const offCtx = offCanvas.getContext('2d');
+                for (let i = 0; i < this.glowLevels; i++) {
+                    const intensity = i / (this.glowLevels - 1); 
+                    const offCanvas = document.createElement('canvas');
+                    const padding = 40; 
+                    const maxRadius = 4 + (intensity * 6); 
+                    
+                    offCanvas.width = maxRadius * 2 + padding * 2;
+                    offCanvas.height = maxRadius * 2 + padding * 2;
+                    const offCtx = offCanvas.getContext('2d');
 
-                const cx = offCanvas.width / 2;
-                const cy = offCanvas.height / 2;
+                    const cx = offCanvas.width / 2;
+                    const cy = offCanvas.height / 2;
 
-                offCtx.beginPath();
-                offCtx.arc(cx, cy, maxRadius, 0, Math.PI * 2);
-                
-                // Color inactivo: Apenas visible pero sin aura para estructura base (Gris Translúcido)
-                if (intensity === 0) {
-                    offCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-                } else {
-                    const isKick = (intensity > 0.8) && (v > 3); // Solo blanco si es alta intensidad Y alta variante
-                    offCtx.fillStyle = isKick ? '#ffffff' : varColorStr;
-                    offCtx.shadowBlur = 5 + (intensity * 30);
-                    offCtx.shadowColor = varColorStr;
+                    offCtx.beginPath();
+                    offCtx.arc(cx, cy, maxRadius, 0, Math.PI * 2);
+                    
+                    if (intensity === 0) {
+                        offCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                    } else {
+                        const isKick = (intensity > 0.8) && (v > 3);
+                        offCtx.fillStyle = isKick ? '#ffffff' : varColorStr;
+                        offCtx.shadowBlur = 5 + (intensity * 30);
+                        offCtx.shadowColor = varColorStr;
+                    }
+
+                    offCtx.fill();
+                    arrNiveles.push(offCanvas);
                 }
-
-                offCtx.fill();
-                arrNiveles.push(offCanvas);
+                arrVariants.push(arrNiveles);
             }
-            this.glowSprites.push(arrNiveles);
+            this.glowSprites.push(arrVariants);
         }
     }
 
@@ -358,7 +363,6 @@ class AudioVisualizer {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
         this.initGrid();
-        this.preRenderGlowSprites(0, 255, 255); 
     }
 
     initAudio(stream) {
@@ -426,21 +430,6 @@ class AudioVisualizer {
         this.ctx.globalCompositeOperation = 'source-over';
         this.ctx.fillStyle = '#000000'; 
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        // --- MODO AMBIENTE DYNAMIC COLOR ---
-        const targetColor = interpolateColor(this.normalizedEnergy);
-        this.currentAmbientColor.r = lerp(this.currentAmbientColor.r, targetColor.r, 0.05);
-        this.currentAmbientColor.g = lerp(this.currentAmbientColor.g, targetColor.g, 0.05);
-        this.currentAmbientColor.b = lerp(this.currentAmbientColor.b, targetColor.b, 0.05);
-
-        const rStr = Math.round(this.currentAmbientColor.r);
-        const gStr = Math.round(this.currentAmbientColor.g);
-        const bStr = Math.round(this.currentAmbientColor.b);
-        
-        const colorRep = `rgb(${rStr}, ${gStr}, ${bStr})`;
-        if (colorRep !== this.lastRenderedColorStr) {
-            this.preRenderGlowSprites(rStr, gStr, bStr);
-        }
 
         // --- ACTUALIZACIÓN Y DIBUJO 3D ---
         const ctxGlobalAlphaCache = this.ctx.globalAlpha; 
