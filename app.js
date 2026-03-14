@@ -418,8 +418,26 @@ startBtn.addEventListener('click', async () => {
         startBtn.style.display = 'none'; 
         viz.initAudio(stream);
 
+        // Solicitar Pantalla Completa para máxima inmersión
+        if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch(err => console.log("Fullscreen error:", err));
+        }
+
     } catch (err) {
         console.error('Error al acceder al audio del sistema:', err);
         alert('No se pudo acceder al audio. Por favor, asegúrate de compatir con la casilla "Compartir audio".');
+    }
+});
+
+// Toggle Interactivo: Alternar pantalla completa con Doble Clic en cualquier lado
+window.addEventListener('dblclick', () => {
+    if (!document.fullscreenElement) {
+        if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch(err => console.log("Fullscreen error:", err));
+        }
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        }
     }
 });
