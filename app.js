@@ -12,13 +12,16 @@ function pseudoNoise(x, y, time) {
     return (Math.sin(x * 0.05 + time) + Math.sin(y * 0.05 + time * 1.5)) * 0.5;
 }
 
-// --- Paleta de Colores Dinámica ---
+// --- Paleta de Colores Dinámica Ampliada ---
 const colorRamp = [
-    { threshold: 0.0, r: 0, g: 50, b: 255 },     // Azul profundo (Quiet)
-    { threshold: 0.3, r: 0, g: 200, b: 255 },    // Cian suave
-    { threshold: 0.6, r: 200, g: 0, b: 255 },    // Magenta / Morado (Build-up)
-    { threshold: 0.8, r: 255, g: 20, b: 147 },   // Rosa eléctrico
-    { threshold: 1.0, r: 255, g: 80, b: 0 }      // Oro/Naranja/Rojo (Drop)
+    { threshold: 0.0, r: 0, g: 30, b: 255 },     // Azul Medianoche profundo (Quiet)
+    { threshold: 0.15, r: 0, g: 150, b: 255 },   // Azul Cyan
+    { threshold: 0.3, r: 0, g: 255, b: 150 },    // Verde Neón / Esmeralda
+    { threshold: 0.45, r: 150, g: 255, b: 0 },   // Amarillo Lima
+    { threshold: 0.6, r: 255, g: 200, b: 0 },    // Dorado
+    { threshold: 0.75, r: 255, g: 50, b: 150 },  // Fucsia brillante (Build-up)
+    { threshold: 0.9, r: 255, g: 0, b: 50 },     // Rojo Carmesí
+    { threshold: 1.0, r: 255, g: 255, b: 255 }   // Blanco puro (Drop brutal)
 ];
 
 function interpolateColor(energy) {
@@ -362,10 +365,10 @@ class AudioVisualizer {
         const timeSpeed = 1.0 + (this.normalizedTreble * 15.0);
         this.globalTime += dt * timeSpeed; 
 
-        // --- RENDERIZADO CON MOTION BLUR ---
-        // Enlazar el fondo negro pero con baja opacidad (0.15) para dejar estelas de luz "Motion Blur"
+        // --- RENDERIZADO ALTO CONTRASTE (CERO GHOSTING) ---
+        // Limpiar completamente la pantalla en negro puro por cada frame. Esto elimina la estela (desenfoque).
         this.ctx.globalCompositeOperation = 'source-over';
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.25)'; 
+        this.ctx.fillStyle = '#000000'; 
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         // --- MODO AMBIENTE DYNAMIC COLOR ---
