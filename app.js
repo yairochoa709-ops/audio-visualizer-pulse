@@ -137,9 +137,11 @@ class Dot {
 
         // --- Mutes y Altibajos según el Modo Especial Físico ---
         if (this.vis.mode === 'supernova') {
-            // Gravedad Cero: Anillo focal destruido, explosión bruta a cámara
-            displacementMagnitude = pushDisplacement * 3.5; 
-            audioPush *= 1.5; 
+            // Estilo Trap Nation: El centro de la esfera no se deforma por las frecuencias (latido suave),
+            // pero el borde de la silueta (edgeFactor cercano a 1) recibe el impacto exponencial y estalla en picos
+            // anulando temporalmente la gravedad esférica
+            displacementMagnitude = pushDisplacement * 6.0 * this.edgeFactor; 
+            audioPush *= 1.2; 
         } else if (this.vis.mode === 'implosion') {
             // Agujero Negro: Inversión gravimétrica que traga la masa hacia el núcleo
             const suckPower = this.vis.normalizedBass * 1.8;
