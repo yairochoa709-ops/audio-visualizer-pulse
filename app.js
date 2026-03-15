@@ -287,12 +287,14 @@ class AudioVisualizer {
         this.normalizedEnergy = 0;
         this.normalizedBass = 0;
         this.normalizedTreble = 0;
+        this.neuralOverride = false; // Flag para activar la red neural por voz
+        this.implosionTimer = 0; // Temporizador para encadenar Implosión a Supernova
 
         // Historial Beat Detection (Últimos 2 segundos = ~120 frames a 60fps)
         this.bassHistory = new Array(120).fill(0);
         this.historyIndex = 0;
         this.lastBeatTime = 0;
-        this.BEAT_COOLDOWN = 2000;
+        this.BEAT_COOLDOWN = 1500; // Ligeramente más rápido para permitir el combo Implosión
 
         // Listeners
         window.addEventListener('resize', this.resizeCanvas.bind(this));
@@ -326,9 +328,15 @@ class AudioVisualizer {
             (nowMs - this.lastBeatTime > this.BEAT_COOLDOWN)) {
             
             // BOOM! Beat detected!
-            const modosDisponibles = ['diamond', 'neural', 'chevron', 'implosion', 'supernova'];
+            // Ya no vamos a Supernova al azar; Supernova se dispara después de Implosion.
+            const modosDisponibles = ['diamond', 'chevron', 'implosion'];
             const currentIndex = modosDisponibles.indexOf(this.mode);
             this.mode = modosDisponibles[(currentIndex + 1) % modosDisponibles.length];
+            
+            // Si tocamos implosión, iniciamos la mecha de Supernova
+            if (this.mode === 'implosion') {
+                this.implosionTimer = 1.0; // 1 segundo de implosion antes de la explosión
+            }
             
             this.lastBeatTime = nowMs;
             
@@ -460,6 +468,7 @@ class AudioVisualizer {
         // --- ANÁLISIS ESPECTRAL LOGARÍTMICO & ENERGÍAS ---
         let totalEnergy = 0;
         let bassEnergy = 0;
+        let vocalEnergy = 0;
         let trebleEnergy = 0;
 
         for (let i = 0; i < this.smoothedDataArray.length; i++) {
@@ -468,23 +477,37 @@ class AudioVisualizer {
             
             // Frecuencias separadas
             if (i < 15) bassEnergy += val; 
+            if (i > 15 && i < 70) vocalEnergy += val; // Red Autónoma de Voces RMS
             if (i > 100 && i < 300) trebleEnergy += val; 
         }
         
         const avgEnergy = totalEnergy / this.smoothedDataArray.length;
         const avgBass = bassEnergy / 15;
+        const avgVocal = vocalEnergy / 55;
         const avgTreble = trebleEnergy / 200;
         
         this.normalizedEnergy = Math.min(1.0, Math.max(0.0, avgEnergy / 128.0)); 
         this.normalizedBass = Math.min(1.0, Math.max(0.0, avgBass / 200.0)); 
         this.normalizedTreble = Math.min(1.0, Math.max(0.0, avgTreble / 100.0)); 
 
+        // Reconocimiento Neural Autónomo (Voces Sostenidas)
+        // Si la voz de un cantante supera el 40%, encendemos Neural Network automáticamente
+        this.neuralOverride = (avgVocal / 255.0) > 0.4;
+
         // Algoritmo Inteligente de Beats
         this.detectBeats(nowMs);
 
-        // --- RELOJ GLOBAL FLUIDO ---
+        // --- RELOJ GLOBAL FLUIDO & TEMPORIZADORES ---
         const timeSpeed = 1.0 + (this.normalizedTreble * 15.0);
         this.globalTime += dt * timeSpeed; 
+        
+        // Temporizador de Implosion Bomba hacia Supernova
+        if (this.mode === 'implosion') {
+            this.implosionTimer -= dt;
+            if (this.implosionTimer <= 0) {
+                this.mode = 'supernova'; // Rebote Explosivo Trap Nation Mode!
+            }
+        }
 
         // --- RENDERIZADO ALTO CONTRASTE (CERO GHOSTING) ---
         // Limpiar completamente la pantalla en negro puro por cada frame. Esto elimina la estela (desenfoque).
@@ -519,9 +542,9 @@ class AudioVisualizer {
             sortedDots[i].draw(this.ctx);
         }
 
-        // --- EFECTO RED NEURAL TÉRMICA ---
-        // Dibujamos líneas estilo constelación polygonal cuando el modo está activo
-        if (this.mode === 'neural') {
+        // --- EFECTO RED NEURAL TÉRMICA (AUTÓNOMA) ---
+        // Dibujamos líneas estilo constelación polygonal cuando el modo está activo, o mediante voces
+        if (this.mode === 'neural' || this.neuralOverride) {
             this.ctx.globalCompositeOperation = 'lighter';
             this.ctx.lineWidth = 1.0;
             
