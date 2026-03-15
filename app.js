@@ -92,13 +92,13 @@ class Dot {
         const dataIndex = Math.floor((this.index / this.vis.dots.length) * 100); 
         const audioVal = this.vis.smoothedDataArray[Math.min(dataIndex, 100)] / 255.0; 
 
-        if (this.vis.mode === 'diamond') {
+        if (this.vis.mode === 'diamond' || this.vis.mode === 'neural' || this.vis.mode === 'supernova') {
             // Modo "Marea Ecuatorial": Ondas basadas en longitud 
             const waveAmplitude = 0.2 + (this.vis.normalizedBass * 0.4);
             waveSine = waveAmplitude * Math.sin(this.vis.globalTime * 3 - this.lon * 5);
             audioPush = (audioVal * 0.4) + (this.vis.normalizedEnergy * 0.3) + Math.max(0, waveSine);
 
-        } else if (this.vis.mode === 'chevron') {
+        } else if (this.vis.mode === 'chevron' || this.vis.mode === 'implosion') {
             // Modo "Pulsos Polares": Ondas basadas en latitud
             const waveAmplitude = 0.25 + (this.vis.normalizedBass * 0.3);
             waveSine = waveAmplitude * Math.sin(this.vis.globalTime * 3 - this.lat * 5);
@@ -130,14 +130,25 @@ class Dot {
 
         // Generamos un campo gravitacional que empuja fuera la coordenada tridimensional XYZ local.
         // Combinamos la física del "waveSine", la estática del "audioTopo" y un multiplicador
-        // Multiplicado por *centerFactor*, el efecto colapsa en los bordes formando un Anillo Circular Limpio
         let pushDisplacement = (audioTopo * 0.6) + (waveSine * 0.3);
         if (pushDisplacement < 0) pushDisplacement = 0;
         
         let displacementMagnitude = pushDisplacement * 1.5 * centerFactor;
 
-        // Los nodos reducen su aceleración elástica per se con el requerimiento central del paso anterior
-        audioPush *= (0.8 + 0.2 * this.edgeFactor);
+        // --- Mutes y Altibajos según el Modo Especial Físico ---
+        if (this.vis.mode === 'supernova') {
+            // Gravedad Cero: Anillo focal destruido, explosión bruta a cámara
+            displacementMagnitude = pushDisplacement * 3.5; 
+            audioPush *= 1.5; 
+        } else if (this.vis.mode === 'implosion') {
+            // Agujero Negro: Inversión gravimétrica que traga la masa hacia el núcleo
+            const suckPower = this.vis.normalizedBass * 1.8;
+            displacementMagnitude = -suckPower * centerFactor;
+            audioPush *= 0.1; // Se asfixian los destellos individuales
+        } else {
+            // Modos Regulares: Los nodos reducen su aceleración rítmica hasta un 20% al acercarse al centro
+            audioPush *= (0.8 + 0.2 * this.edgeFactor);
+        }
 
         // --- 2. Física Newtoniana (Hooks Law + Damping) ---
         this.acceleration = audioPush;
@@ -160,7 +171,8 @@ class Dot {
         
         // Sumamos el desplazamiento gravitacional a la escala base y extendemos vectorialmente X, Y y Z
         // antes de rotarlos. ¡Esto altera físicamente la forma Base de la Rejilla!
-        const finalDistortion = expandPulse + displacementMagnitude;
+        let finalDistortion = expandPulse + displacementMagnitude;
+        if (finalDistortion < 0.01) finalDistortion = 0.01; // Restricción Anti-Materia (impide escalar a negativo)
 
         const px = this.baseX * finalDistortion;
         const py = this.baseY * finalDistortion;
@@ -312,7 +324,10 @@ class AudioVisualizer {
             (nowMs - this.lastBeatTime > this.BEAT_COOLDOWN)) {
             
             // BOOM! Beat detected!
-            this.mode = this.mode === 'diamond' ? 'chevron' : 'diamond';
+            const modosDisponibles = ['diamond', 'neural', 'chevron', 'implosion', 'supernova'];
+            const currentIndex = modosDisponibles.indexOf(this.mode);
+            this.mode = modosDisponibles[(currentIndex + 1) % modosDisponibles.length];
+            
             this.lastBeatTime = nowMs;
             
             // "Pequeño destello global de cámara" - Truco visual extra opcional
@@ -500,6 +515,51 @@ class AudioVisualizer {
         // Trazado en orden de capas
         for (let i = 0; i < sortedDots.length; i++) {
             sortedDots[i].draw(this.ctx);
+        }
+
+        // --- EFECTO RED NEURAL TÉRMICA ---
+        // Dibujamos líneas estilo constelación polygonal cuando el modo está activo
+        if (this.mode === 'neural') {
+            this.ctx.globalCompositeOperation = 'lighter';
+            this.ctx.lineWidth = 1.0;
+            
+            // Calculamos color de línea incandescente sincronizado con el globo principal
+            const progresoColor = Math.abs((this.globalTime / 3.0) % NUM_HUES);
+            const hueBase = Math.floor(progresoColor) / NUM_HUES;
+            const rgbLine = hslToRgb(hueBase, 1.0, 0.6);
+            this.ctx.strokeStyle = `rgba(${Math.round(rgbLine.r)},${Math.round(rgbLine.g)},${Math.round(rgbLine.b)}, 0.4)`;
+            
+            this.ctx.beginPath();
+            
+            // Generamos las conexiones tejiendo puntos de Fibonacci
+            for (let i = 0; i < this.dots.length; i++) {
+                const dotA = this.dots[i];
+                
+                // Optimizador GFX: Solo renderizamos líneas para nodos frente a cámara
+                if (dotA.currentZ < -dotA.maxRadius * 0.3) continue;
+
+                // Conectar al siguiente punto inmediato de Fibonacci
+                if (i + 1 < this.dots.length) {
+                    const dotB = this.dots[i + 1];
+                    // Trazamos el cordel umbilical únicamente si la gravedad geométrica los mantiene cerca
+                    const dist = Math.sqrt(Math.pow(dotA.x - dotB.x, 2) + Math.pow(dotA.y - dotB.y, 2));
+                    if (dist < 150) {
+                        this.ctx.moveTo(dotA.x, dotA.y);
+                        this.ctx.lineTo(dotB.x, dotB.y);
+                    }
+                }
+                
+                // Conectar al vecino de salto dorado profundo (Patrón Red)
+                if (i + 34 < this.dots.length) {
+                    const dotC = this.dots[i + 34];
+                    const dist = Math.sqrt(Math.pow(dotA.x - dotC.x, 2) + Math.pow(dotA.y - dotC.y, 2));
+                    if (dist < 150) {
+                        this.ctx.moveTo(dotA.x, dotA.y);
+                        this.ctx.lineTo(dotC.x, dotC.y);
+                    }
+                }
+            }
+            this.ctx.stroke();
         }
 
         // Restaurar modo general para el próximo background clear
