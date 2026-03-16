@@ -149,16 +149,23 @@ class Dot {
             
             // Obtenemos un índice del espectro (0 a 120 aprox, omitimos puro siseo inaudible 200+)
             const freqIndex = Math.floor(angleNorm * 120);
-            const freqVal = this.vis.smoothedDataArray[freqIndex] / 255.0;
+            
+            // Para "Lomas Suaves" y menos espinas ahujereadas, promediamos la energía 
+            // de este punto con un vecino cercano 4 bandas adelante, engrosando así la base.
+            let freqVal = (this.vis.smoothedDataArray[freqIndex] + this.vis.smoothedDataArray[Math.min(freqIndex + 4, this.vis.smoothedDataArray.length - 1)]) / 510.0;
             
             // Atenuador vocal para evitar nerviosismo en las bandas medias
             let eqEdgeTopo = freqVal;
             if (freqIndex > 15 && freqIndex < 70) eqEdgeTopo *= 0.3;
-            eqEdgeTopo = Math.pow(eqEdgeTopo, 1.5); // Curva exponencial acústica
+            
+            // Suavizado Inverso: Usar Math.sqrt levanta la base de los sonidos suaves y aplasta la punta
+            // de los estruendos violentos, resultando en "colinas curvas" en vez de picos de lanza.
+            eqEdgeTopo = Math.sqrt(eqEdgeTopo);
 
             // 3. Implosión Perimetral: Sumamos el "Cañón Radial" SOLO al borde de la esfera
-            // Math.pow(this.edgeFactor, 4) asegura que la onda espectral explote exclusivamente en la corona XY.
-            displacementMagnitude += (eqEdgeTopo * 8.0 * Math.pow(this.edgeFactor, 4));
+            // Math.pow(this.edgeFactor, 3) crea una transición más acolchada hacia el centro.
+            // Multiplicador bajó de 8.0 a 4.5 para que las lomas sobresalgan sutil e elegantemente.
+            displacementMagnitude += (eqEdgeTopo * 4.5 * Math.pow(this.edgeFactor, 3));
 
             audioPush *= 1.2; 
         } else if (this.vis.mode === 'implosion') {
