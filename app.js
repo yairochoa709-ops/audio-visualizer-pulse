@@ -136,39 +136,7 @@ class Dot {
         let displacementMagnitude = pushDisplacement * 1.5 * centerFactor;
 
         // --- Mutes y Altibajos según el Modo Especial Físico ---
-        if (this.vis.mode === 'supernova') {
-            // Estilo Trap Nation 3D Radial EQ:
-            // 1. El centro mantiene su distorsión normal y fluida del vórtice (sin aplanarse).
-            displacementMagnitude = pushDisplacement * 1.5 * centerFactor;
-
-            // 2. Extraemos el Ángulo Focal en Pantalla (-PI a PI)
-            const angle2D = Math.atan2(this.currentY, this.currentX);
-            
-            // angleNorm: 0.0 (Izquierda/Derecha = Bajos), 1.0 (Arriba/Abajo = Agudos)
-            const angleNorm = 1.0 - Math.abs(Math.cos(angle2D));
-            
-            // Obtenemos un índice del espectro (0 a 120 aprox, omitimos puro siseo inaudible 200+)
-            const freqIndex = Math.floor(angleNorm * 120);
-            
-            // Para "Lomas Suaves" y menos espinas ahujereadas, promediamos la energía 
-            // de este punto con un vecino cercano 4 bandas adelante, engrosando así la base.
-            let freqVal = (this.vis.smoothedDataArray[freqIndex] + this.vis.smoothedDataArray[Math.min(freqIndex + 4, this.vis.smoothedDataArray.length - 1)]) / 510.0;
-            
-            // Atenuador vocal para evitar nerviosismo en las bandas medias
-            let eqEdgeTopo = freqVal;
-            if (freqIndex > 15 && freqIndex < 70) eqEdgeTopo *= 0.3;
-            
-            // Suavizado Inverso: Usar Math.sqrt levanta la base de los sonidos suaves y aplasta la punta
-            // de los estruendos violentos, resultando en "colinas curvas" en vez de picos de lanza.
-            eqEdgeTopo = Math.sqrt(eqEdgeTopo);
-
-            // 3. Implosión Perimetral: Sumamos el "Cañón Radial" SOLO al borde de la esfera
-            // Math.pow(this.edgeFactor, 3) crea una transición más acolchada hacia el centro.
-            // Multiplicador bajó de 8.0 a 4.5 para que las lomas sobresalgan sutil e elegantemente.
-            displacementMagnitude += (eqEdgeTopo * 4.5 * Math.pow(this.edgeFactor, 3));
-
-            audioPush *= 1.2; 
-        } else if (this.vis.mode === 'implosion') {
+        if (this.vis.mode === 'implosion') {
             // Agujero Negro: Inversión gravimétrica que traga la masa hacia el núcleo
             const suckPower = this.vis.normalizedBass * 1.8;
             displacementMagnitude = -suckPower * centerFactor;
@@ -176,6 +144,9 @@ class Dot {
         } else {
             // Modos Regulares: Los nodos reducen su aceleración rítmica hasta un 20% al acercarse al centro
             audioPush *= (0.8 + 0.2 * this.edgeFactor);
+            // Mejora Dinámica: Acercando sutilmente un empuje a las lomas en el anillo esférico
+            // para que resalten más durante los picos de los bajos musicales
+            displacementMagnitude += (pushDisplacement * 2.5 * Math.pow(this.edgeFactor, 2) * this.vis.normalizedBass);
         }
 
         // --- 2. Física Newtoniana (Hooks Law + Damping) ---
@@ -314,13 +285,12 @@ class AudioVisualizer {
         this.normalizedBass = 0;
         this.normalizedTreble = 0;
         this.neuralOverride = false; // Flag para activar la red neural por voz
-        this.implosionTimer = 0; // Temporizador para encadenar Implosión a Supernova
 
         // Historial Beat Detection (Últimos 2 segundos = ~120 frames a 60fps)
         this.bassHistory = new Array(120).fill(0);
         this.historyIndex = 0;
         this.lastBeatTime = 0;
-        this.BEAT_COOLDOWN = 1500; // Ligeramente más rápido para permitir el combo Implosión
+        this.BEAT_COOLDOWN = 1500;
 
         // Listeners
         window.addEventListener('resize', this.resizeCanvas.bind(this));
@@ -354,15 +324,9 @@ class AudioVisualizer {
             (nowMs - this.lastBeatTime > this.BEAT_COOLDOWN)) {
             
             // BOOM! Beat detected!
-            // Ya no vamos a Supernova al azar; Supernova se dispara después de Implosion.
             const modosDisponibles = ['diamond', 'chevron', 'implosion'];
             const currentIndex = modosDisponibles.indexOf(this.mode);
             this.mode = modosDisponibles[(currentIndex + 1) % modosDisponibles.length];
-            
-            // Si tocamos implosión, iniciamos la mecha de Supernova
-            if (this.mode === 'implosion') {
-                this.implosionTimer = 1.0; // 1 segundo de implosion antes de la explosión
-            }
             
             this.lastBeatTime = nowMs;
             
@@ -523,17 +487,9 @@ class AudioVisualizer {
         // Algoritmo Inteligente de Beats
         this.detectBeats(nowMs);
 
-        // --- RELOJ GLOBAL FLUIDO & TEMPORIZADORES ---
+        // --- RELOJ GLOBAL FLUIDO ---
         const timeSpeed = 1.0 + (this.normalizedTreble * 15.0);
         this.globalTime += dt * timeSpeed; 
-        
-        // Temporizador de Implosion Bomba hacia Supernova
-        if (this.mode === 'implosion') {
-            this.implosionTimer -= dt;
-            if (this.implosionTimer <= 0) {
-                this.mode = 'supernova'; // Rebote Explosivo Trap Nation Mode!
-            }
-        }
 
         // --- RENDERIZADO ALTO CONTRASTE (CERO GHOSTING) ---
         // Limpiar completamente la pantalla en negro puro por cada frame. Esto elimina la estela (desenfoque).
