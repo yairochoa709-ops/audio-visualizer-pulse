@@ -133,20 +133,19 @@ class Dot {
         let pushDisplacement = (audioTopo * 0.6) + (waveSine * 0.3);
         if (pushDisplacement < 0) pushDisplacement = 0;
         
-        let displacementMagnitude = pushDisplacement * 1.5 * centerFactor;
+        // El desplazamiento afecta por igual a todos los ángulos 3D, preservando la perfección esférica 100%
+        let displacementMagnitude = pushDisplacement * 1.5;
 
         // --- Mutes y Altibajos según el Modo Especial Físico ---
         if (this.vis.mode === 'implosion') {
             // Agujero Negro: Inversión gravimétrica que traga la masa hacia el núcleo
             const suckPower = this.vis.normalizedBass * 1.8;
-            displacementMagnitude = -suckPower * centerFactor;
+            displacementMagnitude = -suckPower;
             audioPush *= 0.1; // Se asfixian los destellos individuales
         } else {
-            // Modos Regulares: Los nodos reducen su aceleración rítmica hasta un 20% al acercarse al centro
-            audioPush *= (0.8 + 0.2 * this.edgeFactor);
-            // Mejora Dinámica: Acercando sutilmente un empuje a las lomas en el anillo esférico
-            // para que resalten más durante los picos de los bajos musicales
-            displacementMagnitude += (pushDisplacement * 2.5 * Math.pow(this.edgeFactor, 2) * this.vis.normalizedBass);
+            // Modos Regulares: La esfera "respira" limpiamente en 360 grados durante kicks
+            // Sin achatamientos de cámara, un estallido tridimensional orgánico y puro
+            displacementMagnitude += (pushDisplacement * 1.2 * this.vis.normalizedBass);
         }
 
         // --- 2. Física Newtoniana (Hooks Law + Damping) ---
