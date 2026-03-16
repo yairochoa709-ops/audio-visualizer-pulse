@@ -137,10 +137,29 @@ class Dot {
 
         // --- Mutes y Altibajos según el Modo Especial Físico ---
         if (this.vis.mode === 'supernova') {
-            // Estilo Trap Nation: El centro de la esfera no se deforma por las frecuencias (latido suave),
-            // pero el borde de la silueta (edgeFactor cercano a 1) recibe el impacto exponencial y estalla en picos
-            // anulando temporalmente la gravedad esférica
-            displacementMagnitude = pushDisplacement * 6.0 * this.edgeFactor; 
+            // Estilo Trap Nation 3D Radial EQ:
+            // 1. El centro mantiene su distorsión normal y fluida del vórtice (sin aplanarse).
+            displacementMagnitude = pushDisplacement * 1.5 * centerFactor;
+
+            // 2. Extraemos el Ángulo Focal en Pantalla (-PI a PI)
+            const angle2D = Math.atan2(this.currentY, this.currentX);
+            
+            // angleNorm: 0.0 (Izquierda/Derecha = Bajos), 1.0 (Arriba/Abajo = Agudos)
+            const angleNorm = 1.0 - Math.abs(Math.cos(angle2D));
+            
+            // Obtenemos un índice del espectro (0 a 120 aprox, omitimos puro siseo inaudible 200+)
+            const freqIndex = Math.floor(angleNorm * 120);
+            const freqVal = this.vis.smoothedDataArray[freqIndex] / 255.0;
+            
+            // Atenuador vocal para evitar nerviosismo en las bandas medias
+            let eqEdgeTopo = freqVal;
+            if (freqIndex > 15 && freqIndex < 70) eqEdgeTopo *= 0.3;
+            eqEdgeTopo = Math.pow(eqEdgeTopo, 1.5); // Curva exponencial acústica
+
+            // 3. Implosión Perimetral: Sumamos el "Cañón Radial" SOLO al borde de la esfera
+            // Math.pow(this.edgeFactor, 4) asegura que la onda espectral explote exclusivamente en la corona XY.
+            displacementMagnitude += (eqEdgeTopo * 8.0 * Math.pow(this.edgeFactor, 4));
+
             audioPush *= 1.2; 
         } else if (this.vis.mode === 'implosion') {
             // Agujero Negro: Inversión gravimétrica que traga la masa hacia el núcleo
