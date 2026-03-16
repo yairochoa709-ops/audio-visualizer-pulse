@@ -4,16 +4,20 @@ Un visualizador musical de audio reactivo en tiempo real diseñado para navegado
 
 Inspirado en el **Ambient Mode (Modo Ambiente)** de pantallas modernas Oled y Smart TVs, este proyecto transforma el audio global del sistema operativo o el navegador en una pieza de arte generativo de altísimo contraste.
 
-## ✨ Características Principales
+## ✨ Características Principales (Versión Final)
 
-1. **Captura Directa del Sistema:** Olvídate del ruido del micrófono. Utiliza la `Screen Capture API (getDisplayMedia)` para canalizar el audio en calidad digital prístina directamente desde la tarjeta de sonido o la pestaña del navegador deseada (por ejemplo, YouTube o Spotify).
-2. **Rejilla Geométrica (Ambient Grid):** Reacciona de forma ordenada mediante una matriz de cientos de puntos perfectamente separados que "respiran" orgánicamente.
-3. **Optimización con Sprites (OffscreenCanvas):** Al dibujar miles de resplandores (*Glow*) a 60 FPS el procesador puede derretirse; se utiliza una serie de texturas pre-renderizadas (`drawImage` en lugar de `shadowBlur`) delegando la inmensa carga a la aceleración de la tarjeta gráfica (GPU).
-4. **Cinemática Fluida con Interpolación (Lerp):** El movimiento no es errático ni parpadeante. Cada cálculo implementa matemática LERP (*Linear Interpolation*) garantizando que las formas orgánicas sigan un objetivo acústico elegante.
-5. **Color Dinámico RMS:** Calcula la energía Root Mean Square global en tiempo real para transicionar el ambiente fluidamente a través de una Paleta Dinámica. (Azules tranquilos para silencio; rosas, magentas y blancos/oros cegadores para los **Drops** y la saturación de bajos).
-6. **Alternancia de Patrones (Algoritmos Matemáticos):**
-    *   **Modo Diamante:** Lee la *Distancia Manhattan* desde el núcleo de la pantalla provocando expansiones romboides de 45° que dominan en presencias fuertes de bajos (Kicks).
-    *   **Modo Cheurón (V):** Lee proyeciones de ondas verticales en base a las columnas iteradas, creando un efecto de arrastre ondular en "letra V".
+1. **Captura en Vivo sin Micrófono:** Utiliza la `Screen Capture API` para canalizar audio de altísima fidelidad digital directamente de tu tarjeta madre, ignorando ruidos ambientales o micrófonos pobres.
+2. **Topología Esférica 3D Interactiva:** Atrás quedó el 2D. El visualizador renderiza cientos de estrellas pre-calculadas componiendo una hermosa y profunda esfera holográfica. ¡Usa el **ratón o táctil** para rotarla orgánicamente en tiempo real!
+3. **Optimización Extrema de Sprites:** Los destellos hiper-brillantes están pre-renderizados en un *OffscreenCanvas* de múltiples planos, inyectando 60 FPS sin derretir el procesador.
+4. **Gradiente Termodinámico RGB:** Contiene un bucle hipnótico que mezcla fluidamente a través de **12 fases de color HSL** cada 3 segundos usando composición `lighter` sin cálculos excesivos sobre la marcha.
+5. **Algoritmo de Físicas Acústicas Profesionales:**
+    *   **Elastic Newtoniana:** Cada punto de la galaxia cuenta con cálculo de masa, inercia, velocidad y resistencia elástica, resultando en oscilaciones suaves ("Motion Damping") tras un estallido sonoro.
+    *   **Beat Detection Inteligente:** Lee constantemente los últimos 2 segundos de `RMS` de bajos para disparar drops matemáticamente perfectos, no al azar.
+6. **Triple Modo Galáctico:**
+    *   **Diamante:** Expansión romboide clásica.
+    *   **Cheurón (V):** Ondulaciones en zig-zag que atraviesan los hemisferios.
+    *   **Gravity Implosion (Agujero Negro):** Un evento especial que aplasta toda la galaxia 3D hacia un núcleo invisible por microsegundos durante caídas rítmicas estridentes.
+7. **Red Neural Térmica (Autónoma):** Si el análisis central detecta **energía vocal o cánticos mantenidos**, el ecosistema 3D tejerá automáticamente haces de luz sólidos conectando todas las estrellas parpadeantes.
 
 ## 🚀 Cómo usar el Visualizador
 
