@@ -4,6 +4,9 @@ Un visualizador musical de audio reactivo en tiempo real diseñado para navegado
 
 Inspirado en el **Ambient Mode (Modo Ambiente)** de pantallas modernas Oled y Smart TVs, este proyecto transforma el audio global del sistema operativo o el navegador en una pieza de arte generativo de altísimo contraste.
 
+## Vista previa
+https://yairochoa709-ops.github.io/audio-visualizer-pulse/
+
 ## ✨ Características Principales (Versión Final)
 
 1. **Captura en Vivo sin Micrófono:** Utiliza la `Screen Capture API` para canalizar audio de altísima fidelidad digital directamente de tu tarjeta madre, ignorando ruidos ambientales o micrófonos pobres.
