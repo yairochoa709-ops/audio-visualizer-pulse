@@ -1,6 +1,6 @@
 // ============================================================
 //  AUDIO VISUALIZER PULSE  –  Multi-Layer 3D Sphere Engine
-//  Arquitectura: 3 Capas Concéntricas + Shockwave + 3-Band EQ
+//  Arquitectura: 3 Capas Concéntricas + Contrast Lock + 3-Band EQ
 //  Zero Dependencies  |  ES6+ OOP  |  Vanilla JS
 // ============================================================
 
@@ -42,13 +42,14 @@ function hslToRgb(h, s, l) {
     }
     return { r: r * 255, g: g * 255, b: b * 255 };
 }
+
 function mixColorsRGB(c1, c2, amt) {
     return { r: lerp(c1.r, c2.r, amt), g: lerp(c1.g, c2.g, amt), b: lerp(c1.b, c2.b, amt) };
 }
 
 // ------------------------------------------------------------------
-// CONSTANTES DE CAPAS CONCENTRICAS
-//   Ajusta aqui radios, conteos y fisicas por capa facilmente
+// CONSTANTES DE CAPAS CONCÉNTRICAS
+//   Ajusta aquí radios, conteos y físicas por capa fácilmente
 // ------------------------------------------------------------------
 const LAYER = {
     core: {
@@ -64,11 +65,10 @@ const LAYER = {
         rotDirY: 1.0, rotDirX: 1.0, rotDirZ: 1.0,
     },
     corona: {
-        count: 220, radiusMult: 1.32, radiusMax: 1.52,
+        count: 220, radiusMult: 1.34, radiusMax: 1.50,
         elasticity: 0.20, friction: 0.85,
         hueOffset: 10,
-        rotDirY: 1.3, rotDirX: 0.7, rotDirZ: -0.5,
-        orbitTilt: 0.436, // 25 grados en radianes
+        rotDirY: 0.0, rotDirX: 0.0, rotDirZ: 1.0,
     },
 };
 
@@ -77,7 +77,7 @@ let shockwavePhase  = 0.0;
 let shockwaveActive = false;
 
 // ------------------------------------------------------------------
-// CLASE DOT  –  Particula Espacial 3D con capa asignada
+// CLASE DOT  –  Partícula Espacial 3D con capa asignada
 // ------------------------------------------------------------------
 class Dot {
     constructor(index, bx, by, bz, maxRadius, vis, layer) {
@@ -89,12 +89,18 @@ class Dot {
         this.baseZ     = bz;
         this.maxRadius = maxRadius; // radio del MANTO para referencia global
 
-        this.currentX = bx; this.currentY = by; this.currentZ = bz;
-        this.x = 0; this.y = 0; this.scale = 1;
+        this.currentX = bx;
+        this.currentY = by;
+        this.currentZ = bz;
+        this.x = 0;
+        this.y = 0;
+        this.scale = 1;
 
-        const baseR = Math.sqrt(bx*bx + by*by + bz*bz) || 1;
+        const baseR = Math.sqrt(bx * bx + by * by + bz * bz) || 1;
         this.lat = Math.asin(clamp(by / baseR, -1, 1));
         this.lon = Math.atan2(bz, bx);
+        // Ángulo polar en el plano frontal X-Y (para la corona)
+        this.ringAngle = Math.atan2(by, bx);
 
         const cfg       = LAYER[layer];
         this.elasticity = cfg.elasticity;
@@ -106,7 +112,12 @@ class Dot {
         this.acceleration = 0;
         this.edgeFactor   = 1.0;
 
-        // Pre-calculo de jitter para corona (cero GC en loop)
+        // Estado del patrón geométrico (Contrast Lock)
+        this.patternMask     = 0.5;
+        this.isActivePattern = false;
+        this._shockGlow      = 0;
+
+        // Pre-cálculo de jitter para corona (cero GC en loop)
         this.jitterPhase = Math.random() * Math.PI * 2;
         this.jitterFreq  = 0.8 + Math.random() * 1.4;
     }
@@ -116,40 +127,12 @@ class Dot {
         const cfg = LAYER[this.layer];
         const t   = vis.globalTime;
 
-        // 1. AUDIO PUSH POR CAPA
-        // Solo impulsa la fisica elastica (currentSize -> glow/tamano).
-        // NO se usa para deformar posicion en core/mantle.
-        let audioPush = 0;
-        let waveSine  = 0;
+        // Factor de centro vs borde en proyección 2D
+        const rad2D = Math.sqrt(this.currentX * this.currentX + this.currentY * this.currentY);
+        this.edgeFactor = clamp(rad2D / this.maxRadius, 0, 1);
+        const centerFactor = 1.0 - this.edgeFactor;
 
-        if (this.layer === "core") {
-            // NUCLEO: respiracion isotropa pura.
-            // Sin ondas angulares (lon/lat) -> forma esferica 100% simetrica.
-            audioPush = vis.normalizedBass * 0.75 + vis.normalizedEnergy * 0.15;
-
-        } else if (this.layer === "mantle") {
-            // MANTO: modos simetricos originales (Diamond / Chevron) por midEnergy.
-            // waveSine solo impulsa audioPush (fisica), NO posicion directamente.
-            const wA = 0.18 + vis.normalizedMid * 0.32;
-            if (vis.mode === "diamond") {
-                waveSine = wA * Math.sin(t * 3 - this.lon * 5);
-            } else {
-                waveSine = wA * Math.sin(t * 3 - this.lat * 5);
-            }
-            audioPush = vis.normalizedMid * 0.40 + vis.normalizedEnergy * 0.20 + Math.max(0, waveSine);
-
-        } else {
-            // CORONA: sin cambios - logica intacta
-            const jitter = vis.normalizedHigh > 0.55
-                ? 0.06 * Math.sin(t * this.jitterFreq + this.jitterPhase) : 0;
-            waveSine  = (0.15 + vis.normalizedHigh * 0.5) * Math.sin(t * 5 - this.lon * 8);
-            audioPush = vis.normalizedHigh * 0.55 + vis.normalizedEnergy * 0.15
-                      + Math.max(0, waveSine) + jitter;
-        }
-
-        // 2. SHOCKWAVE SIMETRICO - onda de luz
-        // Impulsa fisica (glow) + micro-pulso radial UNIFORME (max +6%).
-        // NO anade desplazamiento diferencial por angulo -> no deforma la esfera.
+        // Shockwave simétrico global (onda de luz)
         this._shockGlow = 0;
         if (shockwaveActive) {
             const delay      = this.layer === "core" ? 0.0 : this.layer === "mantle" ? 0.18 : 0.38;
@@ -157,73 +140,159 @@ class Dot {
             const wave       = localPhase < 0.3
                 ? localPhase / 0.3
                 : Math.exp(-6 * (localPhase - 0.3));
-            audioPush       += wave * 0.55;
             this._shockGlow  = wave;
         }
-
-        // 3. DESPLAZAMIENTO RADIAL NCS (solo manto, acotado al 8%)
-        // Core y corona: dispMag = 0 -> esfera perfecta.
-        // Manto: muy suave, concentrado en hemisferio frontal (centerFactor).
-        const dataIndex = Math.floor((this.index / vis.dots.length) * 120);
-        let audioTopo   = vis.smoothedDataArray
-            ? vis.smoothedDataArray[Math.min(dataIndex, vis.smoothedDataArray.length - 1)] / 255.0 : 0;
-        if (dataIndex > 15 && dataIndex < 70) audioTopo *= 0.3;
-        audioTopo = Math.pow(audioTopo, 1.3);
-
-        const rad2D = Math.sqrt(this.currentX * this.currentX + this.currentY * this.currentY);
-        this.edgeFactor = clamp(rad2D / this.maxRadius, 0, 1);
-        const centerFactor = 1.0 - this.edgeFactor;
-
-        let dispMag = 0;
-        if (this.layer === "mantle") {
-            const rawDisp = clamp(audioTopo * 0.55 + Math.max(0, waveSine) * 0.12, 0, 1);
-            dispMag = rawDisp * 0.08 * centerFactor;
-        }
-        audioPush *= (0.8 + 0.2 * this.edgeFactor);
-
-        // 4. FISICA NEWTONIANA (Hook's Law + Damping)
-        this.acceleration  = audioPush;
-        this.velocity     += this.acceleration;
-        this.velocity     += (0 - this.currentSize) * this.elasticity;
-        this.velocity     *= this.friction;
-        if (this.velocity > 2) this.velocity = 2;
-        this.currentSize  += this.velocity;
-        if (this.currentSize < 0) this.currentSize = 0;
-
-        // 5. ROTACION 3D INDEPENDIENTE POR CAPA
-        const rotY = vis.globalTime * 0.15 * cfg.rotDirY;
-        const rotX = Math.sin(vis.globalTime * 0.1) * 0.15 * cfg.rotDirX;
-        const rotZ = vis.globalTime * 0.05 * cfg.rotDirZ;
-
-        const bassBump = this.layer === "core"   ? vis.normalizedBass
-                       : this.layer === "mantle" ? vis.normalizedMid  * 0.5
-                       :                           vis.normalizedHigh * 0.5;
-
-        // Micro-pulso shockwave uniforme (max 6%), igual para TODAS las particulas
         const swRadial = this._shockGlow * 0.06;
 
-        const expandPulse = 1.0
-            + bassBump * 0.12
-            + pseudoNoise(this.baseX, this.baseY, vis.globalTime) * 0.04
-            + swRadial;
+        let audioPush = 0;
+        let dispMag   = 0;
 
-        const finalDist = Math.max(0.01, expandPulse + dispMag);
+        // ── 1. PATRONES GEOMÉTRICOS & CONTRAST LOCK (CORE & MANTLE) ──
+        if (this.layer === "core" || this.layer === "mantle") {
+            const isCore = (this.layer === "core");
 
-        const px = this.baseX * finalDist;
-        const py = this.baseY * finalDist;
-        const pz = this.baseZ * finalDist;
+            // Manto usa el modo actual; Núcleo usa el modo complementario
+            const modeToUse = isCore
+                ? (vis.mode === "diamond" ? "chevron" : "diamond")
+                : vis.mode;
 
-        const x1 = px * Math.cos(rotZ) - py * Math.sin(rotZ);
-        const y1 = py * Math.cos(rotZ) + px * Math.sin(rotZ);
-        const x2 = x1 * Math.cos(rotY) - pz * Math.sin(rotY);
-        const z1 = pz * Math.cos(rotY) + x1 * Math.sin(rotY);
-        const y2 = y1 * Math.cos(rotX) - z1 * Math.sin(rotX);
-        const z2 = z1 * Math.cos(rotX) + y1 * Math.sin(rotX);
+            // En el núcleo invertimos el tiempo para acoplar con su rotación inversa
+            const patternTime = isCore ? -t * 1.2 : t * 1.5;
 
-        this.currentX = x2; this.currentY = y2; this.currentZ = z2;
+            // Evaluación de patrón matemático simétrico puro (0.0 a 1.0)
+            let rawPattern = 0;
+            if (modeToUse === "diamond") {
+                // Malla simétrica de rombos / diamantes
+                const wave = Math.sin(this.lon * 5.0 - patternTime) * Math.cos(this.lat * 5.0);
+                rawPattern = (wave + 1.0) * 0.5;
+            } else {
+                // Modo Chevron: arcos polares simétricos en V
+                const wave = Math.cos(Math.abs(this.lat) * 6.5 - Math.abs(this.lon) * 1.5 - patternTime);
+                rawPattern = (wave + 1.0) * 0.5;
+            }
 
-        // 6. PROYECCION PERSPECTIVA 2D
-        // FOV con micro-pulso simetrico del shockwave (max +60px)
+            // Para el Núcleo: doble diferenciación -> máscara complementaria inversa
+            if (isCore) {
+                rawPattern = 1.0 - rawPattern;
+            }
+
+            // Curva de contraste exponencial para ensanchar valles (espacio negativo)
+            this.patternMask = Math.pow(clamp(rawPattern, 0, 1), 1.6);
+
+            // CONTRAST LOCK EN MOVIMIENTO:
+            const energy = isCore ? vis.normalizedBass : vis.normalizedMid;
+
+            if (this.patternMask <= 0.45) {
+                // VALLE / ESPACIO NEGATIVO:
+                // Permanece atenuado incluso durante picos y drops fuertes
+                this.isActivePattern = false;
+                audioPush = 0.02 * vis.normalizedEnergy;
+                dispMag   = 0;
+            } else {
+                // ZONA ACTIVA DEL PATRÓN:
+                this.isActivePattern = true;
+                const activeFactor = (this.patternMask - 0.45) / 0.55;
+
+                if (isCore) {
+                    // Núcleo: 100% impulso rítmico de bajos (bassEnergy)
+                    audioPush = (energy * 1.05 + vis.normalizedEnergy * 0.25) * activeFactor;
+                    // Expansión radial controlada (máx +8% para no colisionar con manto)
+                    dispMag   = 0.08 * activeFactor * energy;
+                } else {
+                    // Manto: 100% impulso rítmico de medios (midEnergy)
+                    audioPush = (energy * 0.90 + vis.normalizedEnergy * 0.25) * activeFactor;
+                    // Expansión radial controlada (máx +10% de radio para mantener redondez)
+                    dispMag   = 0.10 * activeFactor * energy * centerFactor;
+                }
+            }
+
+            // Impulso de shockwave en partículas activas
+            if (this._shockGlow > 0 && this.isActivePattern) {
+                audioPush += this._shockGlow * 0.50;
+            }
+
+            // Física Newtoniana elástica
+            this.acceleration  = audioPush;
+            this.velocity     += this.acceleration;
+            this.velocity     += (0 - this.currentSize) * this.elasticity;
+            this.velocity     *= this.friction;
+            if (this.velocity > 2) this.velocity = 2;
+            this.currentSize  += this.velocity;
+            if (this.currentSize < 0) this.currentSize = 0;
+
+            // Rotación 3D independiente por capa
+            const rotY = vis.globalTime * 0.15 * cfg.rotDirY;
+            const rotX = Math.sin(vis.globalTime * 0.1) * 0.15 * cfg.rotDirX;
+            const rotZ = vis.globalTime * 0.05 * cfg.rotDirZ;
+
+            const bassBump = isCore ? vis.normalizedBass * 0.12 : vis.normalizedMid * 0.08;
+            const expandPulse = 1.0
+                + bassBump
+                + pseudoNoise(this.baseX, this.baseY, vis.globalTime) * 0.03
+                + swRadial;
+
+            const finalDist = Math.max(0.01, expandPulse + dispMag);
+
+            const px = this.baseX * finalDist;
+            const py = this.baseY * finalDist;
+            const pz = this.baseZ * finalDist;
+
+            const x1 = px * Math.cos(rotZ) - py * Math.sin(rotZ);
+            const y1 = py * Math.cos(rotZ) + px * Math.sin(rotZ);
+            const x2 = x1 * Math.cos(rotY) - pz * Math.sin(rotY);
+            const z1 = pz * Math.cos(rotY) + x1 * Math.sin(rotY);
+            const y2 = y1 * Math.cos(rotX) - z1 * Math.sin(rotX);
+            const z2 = z1 * Math.cos(rotX) + y1 * Math.sin(rotX);
+
+            this.currentX = x2;
+            this.currentY = y2;
+            this.currentZ = z2;
+
+        } else {
+            // ── 2. ANILLO FRONTAL CORONA (PLANO X-Y) ────────────────
+            // Rotación orbital frontal sobre eje Z (rueda frente al espectador)
+            const rotZ = vis.globalTime * 0.28 * (1.0 + vis.normalizedHigh * 1.5);
+            // Micro-oscilación en X/Y (máx +-0.07 rad / ~4 grados), NUNCA giro de perfil
+            const rotX = Math.sin(vis.globalTime * 0.5) * 0.07;
+            const rotY = Math.cos(vis.globalTime * 0.4) * 0.07;
+
+            // Ondulaciones radiales rítmicas sobre el contorno del anillo (agudos)
+            const ripple = (0.06 + vis.normalizedHigh * 0.16) * Math.sin(vis.globalTime * 5.0 - this.ringAngle * 6.0);
+            const jitter = (vis.normalizedHigh > 0.55)
+                ? 0.04 * Math.sin(vis.globalTime * this.jitterFreq + this.jitterPhase) : 0;
+            const ringDist = 1.0 + ripple + jitter + swRadial;
+
+            audioPush = vis.normalizedHigh * 0.60 + vis.normalizedEnergy * 0.20 + Math.max(0, ripple);
+            if (this._shockGlow > 0) audioPush += this._shockGlow * 0.40;
+
+            this.acceleration  = audioPush;
+            this.velocity     += this.acceleration;
+            this.velocity     += (0 - this.currentSize) * this.elasticity;
+            this.velocity     *= this.friction;
+            if (this.velocity > 2) this.velocity = 2;
+            this.currentSize  += this.velocity;
+            if (this.currentSize < 0) this.currentSize = 0;
+
+            // Coordenadas base en plano X-Y con ondulación radial
+            const px = this.baseX * ringDist;
+            const py = this.baseY * ringDist;
+            const pz = this.baseZ;
+
+            // Rotar primero sobre eje Z (giro orbital continuo frontal)
+            const x1 = px * Math.cos(rotZ) - py * Math.sin(rotZ);
+            const y1 = py * Math.cos(rotZ) + px * Math.sin(rotZ);
+            // Aplicar micro-inclinación sutil X e Y (para profundidad 3D frontal)
+            const x2 = x1 * Math.cos(rotY) - pz * Math.sin(rotY);
+            const z1 = pz * Math.cos(rotY) + x1 * Math.sin(rotY);
+            const y2 = y1 * Math.cos(rotX) - z1 * Math.sin(rotX);
+            const z2 = z1 * Math.cos(rotX) + y1 * Math.sin(rotX);
+
+            this.currentX = x2;
+            this.currentY = y2;
+            this.currentZ = z2;
+        }
+
+        // ── 3. PROYECCIÓN PERSPECTIVA 2D ─────────────────────────────
         const fovPulse = 1000 + this._shockGlow * 60;
         const zProj    = 1500 + this.currentZ;
         this.scale     = fovPulse / zProj;
@@ -234,27 +303,70 @@ class Dot {
 
     draw(ctx) {
         const vis = this.vis;
-
-        let energyIndex = clamp(Math.floor(this.currentSize * vis.glowLevels), 0, vis.glowLevels - 1);
-
-        // Corona: twinkle adicional en picos agudos
-        if (this.layer === "corona" && vis.normalizedHigh > 0.5) {
-            const twinkle = Math.sin(vis.globalTime * this.jitterFreq + this.jitterPhase);
-            energyIndex   = clamp(energyIndex + Math.round(twinkle * 2), 0, vis.glowLevels - 1);
-        }
-
-        let colorVariantIdx = clamp(Math.floor(this.currentSize * (COLOR_VARIANTS - 1)), 0, COLOR_VARIANTS - 1);
-
         const depthNorm = (this.currentZ + this.maxRadius) / (this.maxRadius * 2);
-        let alpha = clamp(0.05 + depthNorm * 0.4 + this.currentSize * 0.5, 0, 1);
-        alpha    *= (0.70 + 0.30 * this.edgeFactor);
-        if (this.layer === "corona") alpha = clamp(alpha * (1 + vis.normalizedHigh), 0, 1);
-        // Depth clarity en el manto: particulas traseras mas translucidas, frontales nitidas
-        if (this.layer === "mantle") alpha *= (0.35 + 0.65 * depthNorm);
-        // Glow boost de shockwave: onda de luz simetrica (no deforma posicion)
-        if (this._shockGlow > 0) {
-            const glowBoost = Math.round(this._shockGlow * 2.5);
-            energyIndex = clamp(energyIndex + glowBoost, 0, vis.glowLevels - 1);
+        const layerSizeMult = this.layer === "core" ? 1.15 : this.layer === "corona" ? 0.85 : 1.0;
+
+        let energyIndex     = 0;
+        let colorVariantIdx = 0;
+        let alpha           = 0;
+        let sizeFactor      = 1.0;
+
+        if (this.layer === "corona") {
+            // CORONA: Anillo exterior de brillo alto y twinkle
+            energyIndex = clamp(Math.floor(this.currentSize * vis.glowLevels), 0, vis.glowLevels - 1);
+            if (vis.normalizedHigh > 0.5) {
+                const twinkle = Math.sin(vis.globalTime * this.jitterFreq + this.jitterPhase);
+                energyIndex = clamp(energyIndex + Math.round(twinkle * 2), 0, vis.glowLevels - 1);
+            }
+            colorVariantIdx = clamp(Math.floor(this.currentSize * (COLOR_VARIANTS - 1)), 0, COLOR_VARIANTS - 1);
+            alpha = clamp(0.35 + vis.normalizedHigh * 0.65, 0, 1);
+            sizeFactor = (0.75 + 0.25 * this.edgeFactor) * layerSizeMult;
+
+        } else {
+            // CORE & MANTLE: CONTRAST LOCK ESTRICTO
+            const isCore = (this.layer === "core");
+            const energy = isCore ? vis.normalizedBass : vis.normalizedMid;
+
+            if (!this.isActivePattern) {
+                // VALLE / ESPACIO NEGATIVO:
+                // Sin Glow, tamaño mínimo, opacidad muy tenue (0.06 a 0.16)
+                energyIndex     = 0;
+                colorVariantIdx = 0;
+                alpha = lerp(0.06, 0.16, this.patternMask / 0.45);
+                if (!isCore) {
+                    // Depth clarity en el manto
+                    alpha *= (0.35 + 0.65 * depthNorm);
+                }
+                sizeFactor = 0.50 * layerSizeMult;
+
+            } else {
+                // PARTÍCULAS ACTIVAS DEL PATRÓN:
+                const activeFactor = (this.patternMask - 0.45) / 0.55;
+
+                // Nivel de Glow intenso en crestas
+                energyIndex = clamp(
+                    Math.floor(this.currentSize * vis.glowLevels * (0.6 + 0.4 * activeFactor)),
+                    0, vis.glowLevels - 1
+                );
+                if (this._shockGlow > 0) {
+                    energyIndex = clamp(energyIndex + Math.round(this._shockGlow * 3), 0, vis.glowLevels - 1);
+                }
+
+                colorVariantIdx = clamp(
+                    Math.floor(this.currentSize * (COLOR_VARIANTS - 1) * activeFactor),
+                    0, COLOR_VARIANTS - 1
+                );
+
+                // Opacidad alta (0.72 a 1.0)
+                alpha = lerp(0.72, 1.0, activeFactor * (0.4 + 0.6 * energy));
+                if (!isCore) {
+                    // Depth clarity en el manto: partículas frontales nítidas
+                    alpha *= (0.40 + 0.60 * depthNorm);
+                }
+
+                // Sprite expandido en zonas activas
+                sizeFactor = (0.75 + 0.45 * activeFactor * (0.4 + 0.6 * energy)) * layerSizeMult;
+            }
         }
 
         const progresoColor = Math.abs((vis.globalTime / 3.0) % NUM_HUES);
@@ -267,8 +379,6 @@ class Dot {
         const sprite2 = vis.glowSprites[h2]?.[colorVariantIdx]?.[energyIndex];
         if (!sprite1 || !sprite2) return;
 
-        const layerSizeMult = this.layer === "core" ? 1.15 : this.layer === "corona" ? 0.80 : 1.0;
-        const sizeFactor    = (0.75 + 0.25 * this.edgeFactor) * layerSizeMult;
         const dimW = sprite1.width  * this.scale * sizeFactor;
         const dimH = sprite1.height * this.scale * sizeFactor;
 
@@ -301,13 +411,13 @@ class AudioVisualizer {
         this.globalTime     = 0;
         this.previousTimeMs = performance.now();
 
-        // Energias normalizadas por banda (0..1)
+        // Energías normalizadas por banda (0..1)
         this.normalizedEnergy = 0;
         this.normalizedBass   = 0; // Sub-Bass / Kick
-        this.normalizedMid    = 0; // Mids / Melodia
+        this.normalizedMid    = 0; // Mids / Melodía
         this.normalizedHigh   = 0; // Highs / Brillo
 
-        // Valores prev para LERP asimetrico
+        // Valores prev para LERP asimétrico
         this._prevBassRaw = 0;
         this._prevMidRaw  = 0;
         this._prevHighRaw = 0;
@@ -400,7 +510,7 @@ class AudioVisualizer {
         this.dots = [];
         const baseRadius = Math.min(this.canvas.width, this.canvas.height) * 0.45;
 
-        // CAPA 1 – NUCLEO
+        // CAPA 1 – NÚCLEO (Esfera Fibonacci interna)
         const coreR   = baseRadius * LAYER.core.radiusMult;
         const corePts = this._fibonacciSphere(LAYER.core.count);
         for (let i = 0; i < corePts.length; i++) {
@@ -409,7 +519,7 @@ class AudioVisualizer {
                                    baseRadius, this, "core"));
         }
 
-        // CAPA 2 – MANTO
+        // CAPA 2 – MANTO (Esfera Fibonacci principal)
         const mantlePts = this._fibonacciSphere(LAYER.mantle.count);
         for (let i = 0; i < mantlePts.length; i++) {
             const p = mantlePts[i];
@@ -417,35 +527,31 @@ class AudioVisualizer {
                                    baseRadius, this, "mantle"));
         }
 
-        // CAPA 3 – CORONA
+        // CAPA 3 – CORONA (Anillo Frontal en Plano X-Y)
         const coronaTotal = LAYER.corona.count;
         const ringCount   = Math.floor(coronaTotal * 0.70);
         const haloCount   = coronaTotal - ringCount;
-        const tilt        = LAYER.corona.orbitTilt;
-        const cosTilt     = Math.cos(tilt);
-        const sinTilt     = Math.sin(tilt);
         const rMin        = baseRadius * LAYER.corona.radiusMult;
         const rMax        = baseRadius * LAYER.corona.radiusMax;
-        const rMid        = (rMin + rMax) * 0.5;
 
-        // Anillo ecuatorial inclinado 25 grados
+        // Anillo frontal en el plano X-Y (70%)
         for (let i = 0; i < ringCount; i++) {
             const angle = (i / ringCount) * Math.PI * 2;
-            const bx0   = Math.cos(angle) * rMid;
-            const bz0   = Math.sin(angle) * rMid;
-            this.dots.push(new Dot(this.dots.length,
-                bx0, -bz0 * sinTilt, bz0 * cosTilt,
-                baseRadius, this, "corona"));
+            const r = rMin + (rMax - rMin) * (0.35 + 0.30 * ((i % 5) / 4));
+            const bx = Math.cos(angle) * r;
+            const by = Math.sin(angle) * r;
+            const bz = Math.sin(angle * 4) * (baseRadius * 0.04);
+            this.dots.push(new Dot(this.dots.length, bx, by, bz, baseRadius, this, "corona"));
         }
 
-        // Halo disperso (30%)
-        const haloPts = this._fibonacciSphere(haloCount);
-        for (let i = 0; i < haloPts.length; i++) {
-            const p    = haloPts[i];
-            const rRnd = rMin + (rMax - rMin) * (i / haloCount);
-            this.dots.push(new Dot(this.dots.length,
-                p.x * rRnd, p.y * rRnd, p.z * rRnd,
-                baseRadius, this, "corona"));
+        // Halo disperso alrededor del anillo frontal (30%)
+        for (let i = 0; i < haloCount; i++) {
+            const angle = (i / haloCount) * Math.PI * 2 + ((i % 3) * 0.35);
+            const r = rMin + (rMax - rMin) * (i / haloCount);
+            const bx = Math.cos(angle) * r;
+            const by = Math.sin(angle) * r;
+            const bz = Math.cos(angle * 3) * (baseRadius * 0.08);
+            this.dots.push(new Dot(this.dots.length, bx, by, bz, baseRadius, this, "corona"));
         }
     }
 
@@ -483,7 +589,7 @@ class AudioVisualizer {
             }
         }
 
-        // ANALISIS ESPECTRAL DE 3 BANDAS
+        // ANÁLISIS ESPECTRAL DE 3 BANDAS
         //   Sub-Bass  Bins 1-6    (~20-140 Hz)
         //   Mids      Bins 7-105  (~150 Hz - 2.5 kHz)
         //   Highs     Bins 106-450 (~2.5 - 11 kHz)
@@ -501,8 +607,8 @@ class AudioVisualizer {
         rawMid  = clamp(rawMid   / (99  * 255), 0, 1);
         rawHigh = clamp(rawHigh  / (345 * 255), 0, 1);
 
-        // LERP ASIMETRICO POR BANDA
-        //   Bass  -> attack 0.75 (punch), decay 0.12 (caida lenta)
+        // LERP ASIMÉTRICO POR BANDA
+        //   Bass  -> attack 0.75 (punch), decay 0.12 (caída lenta)
         //   Mids  -> lerp fluido 0.35
         //   Highs -> lerp ultra-reactivo 0.65
         const bassAmt = rawBass > this._prevBassRaw ? 0.75 : 0.12;
@@ -519,7 +625,7 @@ class AudioVisualizer {
         // BEAT DETECTION
         this.detectBeats(nowMs);
 
-        // AVANCE DEL SHOCKWAVE (~35 frames a 60fps = 0.58s de duracion)
+        // AVANCE DEL SHOCKWAVE (~35 frames a 60fps = 0.58s de duración)
         if (shockwaveActive) {
             shockwavePhase += dt / 0.58;
             if (shockwavePhase >= 1.0) { shockwavePhase = 0.0; shockwaveActive = false; }
@@ -528,23 +634,23 @@ class AudioVisualizer {
         // RELOJ GLOBAL (velocidad modulada por agudos)
         this.globalTime += dt * (1.0 + this.normalizedHigh * 12.0);
 
-        // RENDER – limpiar canvas
+        // RENDER – limpiar canvas en negro absoluto
         this.ctx.globalCompositeOperation = "source-over";
         this.ctx.fillStyle = "#000000";
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // UPDATE DE PARTICULAS
+        // UPDATE DE PARTÍCULAS
         for (let i = 0; i < this.dots.length; i++) this.dots[i].update();
 
-        // Z-SORTING GLOBAL (cubre las 3 capas juntas)
+        // Z-SORTING GLOBAL (cubre las 3 capas juntas para oclusión 3D exacta)
         const sortedDots = this.dots.slice().sort((a, b) => a.currentZ - b.currentZ);
 
-        // MOTION BLUR
+        // MOTION BLUR CON TINT NEGRO
         this.ctx.globalCompositeOperation = "source-over";
         this.ctx.fillStyle = "rgba(0,0,0,0.35)";
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // DIBUJO EN ORDEN Z con composicion lighter
+        // DIBUJO EN ORDEN Z con composición lighter
         this.ctx.globalCompositeOperation = "lighter";
         for (let i = 0; i < sortedDots.length; i++) sortedDots[i].draw(this.ctx);
 
@@ -554,7 +660,7 @@ class AudioVisualizer {
 }
 
 // ------------------------------------------------------------------
-// INICIALIZACION Y EVENTOS UI
+// INICIALIZACIÓN Y EVENTOS UI
 // ------------------------------------------------------------------
 const viz = new AudioVisualizer(canvas, ctx);
 
@@ -571,7 +677,7 @@ startBtn.addEventListener("click", async () => {
         viz.initAudio(stream);
     } catch (err) {
         console.error("Error al acceder al audio del sistema:", err);
-        alert('No se pudo acceder al audio. Asegurate de compartir con la casilla "Compartir audio".');
+        alert('No se pudo acceder al audio. Asegúrate de compartir con la casilla "Compartir audio".');
     }
 });
 
