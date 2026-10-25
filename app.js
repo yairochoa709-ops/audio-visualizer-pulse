@@ -65,8 +65,8 @@ const LAYER = {
         rotDirY: 1.0, rotDirX: 1.0, rotDirZ: 1.0,
     },
     corona: {
-        count: 220, radiusMult: 1.34, radiusMax: 1.50,
-        elasticity: 0.20, friction: 0.85,
+        count: 220, radiusMult: 1.42, radiusMax: 1.42,
+        elasticity: 0.22, friction: 0.82,
         hueOffset: 10,
         rotDirY: 0.0, rotDirX: 0.0, rotDirZ: 1.0,
     },
@@ -80,11 +80,11 @@ let shockwaveActive = false;
 // CLASE DOT  –  Partícula Espacial 3D con capa asignada
 // ------------------------------------------------------------------
 class Dot {
-    constructor(index, bx, by, bz, maxRadius, vis, layer, isHalo = false) {
+    constructor(index, bx, by, bz, maxRadius, vis, layer) {
         this.vis       = vis;
         this.index     = index;
         this.layer     = layer;
-        this.isHalo    = isHalo;
+        this.ringIndex = 0;         // Índice secuencial para anillo corona (0 a 219)
         this.baseX     = bx;
         this.baseY     = by;
         this.baseZ     = bz;
@@ -100,7 +100,6 @@ class Dot {
         const baseR = Math.sqrt(bx * bx + by * by + bz * bz) || 1;
         this.lat = Math.asin(clamp(by / baseR, -1, 1));
         this.lon = Math.atan2(bz, bx);
-        // Ángulo polar en el plano frontal X-Y (para la corona)
         this.ringAngle = Math.atan2(by, bx);
 
         const cfg       = LAYER[layer];
@@ -118,12 +117,8 @@ class Dot {
         this.isActivePattern = false;
         this._shockGlow      = 0;
 
-        // Modulación para el anillo continuo de la corona
-        this.waveHeight      = 0.5;
-
-        // Pre-cálculo de jitter / flotación para halo (cero GC en loop)
-        this.jitterPhase = Math.random() * Math.PI * 2;
-        this.jitterFreq  = 0.8 + Math.random() * 1.4;
+        // Modulación de altura de pico para el anillo único de corona
+        this.waveHeight      = 0.0;
     }
 
     update() {
@@ -229,10 +224,15 @@ class Dot {
             const rotX = Math.sin(vis.globalTime * 0.1) * 0.15 * cfg.rotDirX;
             const rotZ = vis.globalTime * 0.05 * cfg.rotDirZ;
 
-            const bassBump = isCore ? vis.normalizedBass * 0.12 : vis.normalizedMid * 0.08;
+            // CORE JUMP: Efecto salto elástico pronunciado exclusivo del núcleo (hasta +42%)
+            // Mantiene la forma 100% esférica de Fibonacci mediante expansión radial isótropa
+            const coreJump = isCore
+                ? (vis.coreJumpOffset * 0.42 + vis.normalizedBass * 0.08)
+                : (vis.normalizedMid * 0.06);
+
             const expandPulse = 1.0
-                + bassBump
-                + pseudoNoise(this.baseX, this.baseY, vis.globalTime) * 0.03
+                + coreJump
+                + pseudoNoise(this.baseX, this.baseY, vis.globalTime) * (isCore ? 0.01 : 0.03)
                 + swRadial;
 
             const finalDist = Math.max(0.01, expandPulse + dispMag);
@@ -253,104 +253,43 @@ class Dot {
             this.currentZ = z2;
 
         } else {
-            // ── 2. ANILLO Y HALO EXTERIOR (CORONA) ────────────────────
-            const a = this.ringAngle;
+            // ── 2. ANILLO ÚNICO FRONTAL CORONA (PLANO X-Y PURO, Z = 0 FIJO) ─────────
+            // 1. Desplazamiento radial suave desde el espectro espacial pre-suavizado
+            const peakVal = (vis.coronaPeakHeights && this.ringIndex !== undefined)
+                ? vis.coronaPeakHeights[this.ringIndex]
+                : 0;
 
-            // Rotación orbital frontal suave en el eje Z (giro como rueda de frente)
-            const rotZ = vis.globalTime * 0.15 * (1.0 + vis.normalizedHigh * 0.6);
-            // Balanceo 3D sutil en X e Y (máximo ~7-8° / ±0.12 rad), NUNCA giro de perfil
-            const rotX = Math.sin(vis.globalTime * 0.45) * 0.10;
-            const rotY = Math.cos(vis.globalTime * 0.35) * 0.10;
+            // En reposo: desplazamiento = 0 -> círculo perfecto de una sola línea
+            // Con música: picos suaves y limpios hacia afuera (sin desdoblamientos)
+            const peakDisplacement = peakVal * (0.04 + vis.normalizedHigh * 0.32);
+            this.waveHeight = clamp(peakVal * (0.6 + vis.normalizedHigh * 0.6), 0, 1);
 
-            if (!this.isHalo) {
-                // ── A. ANILLO PRINCIPAL CONTINUO ("Hilo Luminoso", 80%) ───
-                // 1. Múltiples armónicos orgánicos cruzados en distinta dirección y velocidad
-                const waveHarmonic =
-                    Math.sin(a * 5.0 + t * 2.2) * 0.35 +
-                    Math.cos(a * 11.0 - t * 3.1) * 0.35 +
-                    Math.sin(a * 19.0 + t * 4.5) * 0.30;
+            const ringDist = 1.0 + peakDisplacement + swRadial;
 
-                // 2. Mapeo simétrico/espejado de bins FFT de agudos (106 a 340)
-                let angleMod = a;
-                while (angleMod < 0) angleMod += Math.PI * 2;
-                angleMod = angleMod % (Math.PI * 2);
-                const normAngle = Math.abs(angleMod - Math.PI) / Math.PI; // 0.0 en 0/2pi, 1.0 en pi (sin costuras)
-                const fftBin = Math.floor(106 + normAngle * 220);
-                const fftVal = vis.smoothedDataArray
-                    ? (vis.smoothedDataArray[Math.min(fftBin, vis.smoothedDataArray.length - 1)] / 255.0)
-                    : 0;
+            // Física elástica idéntica y uniforme para todas las partículas del anillo
+            audioPush = peakVal * (0.35 + vis.normalizedHigh * 0.65);
+            if (this._shockGlow > 0) audioPush += this._shockGlow * 0.40;
 
-                // 3. Modulación con audio: brisa suave en reposo, crestas dinámicas con música
-                const waveAmp = 0.015 + (vis.normalizedHigh * 0.18 + fftVal * 0.08);
-                const combinedWave = (waveHarmonic * 0.55 + (fftVal * 2.0 - 0.5) * 0.45);
+            this.acceleration  = audioPush;
+            this.velocity     += this.acceleration;
+            this.velocity     += (0 - this.currentSize) * this.elasticity;
+            this.velocity     *= this.friction;
+            if (this.velocity > 2) this.velocity = 2;
+            this.currentSize  += this.velocity;
+            if (this.currentSize < 0) this.currentSize = 0;
 
-                // Normalizamos la altura de la onda para modular tamaño, opacidad y glow
-                this.waveHeight = clamp(0.5 + combinedWave * 0.5 + vis.normalizedHigh * 0.25, 0, 1);
+            // Coordenadas base en el plano X-Y
+            const px = this.baseX * ringDist;
+            const py = this.baseY * ringDist;
 
-                const radialDisplacement = combinedWave * waveAmp + swRadial;
-                const ringDist = Math.max(0.7, 1.0 + radialDisplacement);
+            // Rotación orbital lenta estrictamente sobre el eje Z (giro de rueda frontal 2D)
+            const rotZ = vis.globalTime * 0.12 * (1.0 + vis.normalizedHigh * 0.4);
+            const x1 = px * Math.cos(rotZ) - py * Math.sin(rotZ);
+            const y1 = py * Math.cos(rotZ) + px * Math.sin(rotZ);
 
-                // audioPush alimenta currentSize con elasticidad
-                audioPush = (0.25 + vis.normalizedHigh * 0.75) * this.waveHeight;
-                if (this._shockGlow > 0) audioPush += this._shockGlow * 0.45;
-
-                this.acceleration  = audioPush;
-                this.velocity     += this.acceleration;
-                this.velocity     += (0 - this.currentSize) * this.elasticity;
-                this.velocity     *= this.friction;
-                if (this.velocity > 2) this.velocity = 2;
-                this.currentSize  += this.velocity;
-                if (this.currentSize < 0) this.currentSize = 0;
-
-                // Coordenadas en plano frontal con deformación radial multi-armónica
-                const px = this.baseX * ringDist;
-                const py = this.baseY * ringDist;
-                const pz = this.baseZ;
-
-                // Giro orbital en Z primero (frente al espectador)
-                const x1 = px * Math.cos(rotZ) - py * Math.sin(rotZ);
-                const y1 = py * Math.cos(rotZ) + px * Math.sin(rotZ);
-                // Balanceo 3D sutil X e Y
-                const x2 = x1 * Math.cos(rotY) - pz * Math.sin(rotY);
-                const z1 = pz * Math.cos(rotY) + x1 * Math.sin(rotY);
-                const y2 = y1 * Math.cos(rotX) - z1 * Math.sin(rotX);
-                const z2 = z1 * Math.cos(rotX) + y1 * Math.sin(rotX);
-
-                this.currentX = x2;
-                this.currentY = y2;
-                this.currentZ = z2;
-
-            } else {
-                // ── B. POLVO ESTELAR / HALO FLOTANTE (20%) ───────────
-                const floatAngle = t * this.jitterFreq * 0.5 + this.jitterPhase;
-                const floatRadius = 1.0 + (vis.normalizedHigh * 0.08) * Math.sin(floatAngle) + swRadial;
-
-                audioPush = vis.normalizedHigh * 0.50 + vis.normalizedEnergy * 0.20;
-                if (this._shockGlow > 0) audioPush += this._shockGlow * 0.30;
-
-                this.acceleration  = audioPush;
-                this.velocity     += this.acceleration;
-                this.velocity     += (0 - this.currentSize) * this.elasticity;
-                this.velocity     *= this.friction;
-                if (this.velocity > 2) this.velocity = 2;
-                this.currentSize  += this.velocity;
-                if (this.currentSize < 0) this.currentSize = 0;
-
-                const px = this.baseX * floatRadius;
-                const py = this.baseY * floatRadius;
-                const pz = this.baseZ + Math.sin(floatAngle) * (this.maxRadius * 0.05);
-
-                const x1 = px * Math.cos(rotZ * 0.7) - py * Math.sin(rotZ * 0.7);
-                const y1 = py * Math.cos(rotZ * 0.7) + px * Math.sin(rotZ * 0.7);
-                const x2 = x1 * Math.cos(rotY) - pz * Math.sin(rotY);
-                const z1 = pz * Math.cos(rotY) + x1 * Math.sin(rotY);
-                const y2 = y1 * Math.cos(rotX) - z1 * Math.sin(rotX);
-                const z2 = z1 * Math.cos(rotX) + y1 * Math.sin(rotX);
-
-                this.currentX = x2;
-                this.currentY = y2;
-                this.currentZ = z2;
-            }
+            this.currentX = x1;
+            this.currentY = y1;
+            this.currentZ = 0; // BLOQUEO ESTRICTO EN Z = 0 (cero desdoblamiento de perspectiva)
         }
 
         // ── 3. PROYECCIÓN PERSPECTIVA 2D ─────────────────────────────
@@ -373,40 +312,28 @@ class Dot {
         let sizeFactor      = 1.0;
 
         if (this.layer === "corona") {
-            if (!this.isHalo) {
-                // ── A. ANILLO PRINCIPAL CONTINUO: Trazo luminoso con perlas en crestas ──
-                const wH = this.waveHeight;
+            // ANILLO CONTINUO ÚNICO (Línea continua con picos rítmicos limpios)
+            const wH = this.waveHeight;
 
-                // GlowLevel: valles 2-3, crestas 7-9
-                const baseGlow = Math.floor(lerp(2, 9, wH * (0.55 + 0.45 * vis.normalizedHigh)));
-                energyIndex = clamp(baseGlow, 0, vis.glowLevels - 1);
-                if (this._shockGlow > 0) {
-                    energyIndex = clamp(energyIndex + Math.round(this._shockGlow * 3), 0, vis.glowLevels - 1);
-                }
-
-                // ColorVariant: sube en crestas hacia el tono más brillante
-                colorVariantIdx = clamp(Math.floor(wH * (COLOR_VARIANTS - 1)), 0, COLOR_VARIANTS - 1);
-
-                // Opacidad: valles 0.35 - 0.60, crestas 0.85 - 1.0
-                alpha = lerp(0.38, 0.98, wH);
-                if (vis.normalizedHigh > 0.4) {
-                    alpha = clamp(alpha + vis.normalizedHigh * 0.15, 0, 1.0);
-                }
-
-                // Tamaño: trazo fino y nítido en valles (0.60), dilatado en crestas (1.30)
-                const ringSizeMult = lerp(0.60, 1.30, wH);
-                sizeFactor = ringSizeMult * layerSizeMult;
-
-            } else {
-                // ── B. POLVO ESTELAR / HALO FLOTANTE: Chispas parpadeantes ──
-                const twinkle = Math.sin(vis.globalTime * this.jitterFreq * 2.0 + this.jitterPhase);
-                energyIndex = clamp(Math.floor(vis.normalizedHigh * 7 + (twinkle > 0 ? 2 : 0)), 0, vis.glowLevels - 1);
-                colorVariantIdx = clamp(Math.floor(this.currentSize * (COLOR_VARIANTS - 1)), 0, COLOR_VARIANTS - 1);
-
-                // Opacidad tenue de chispa
-                alpha = clamp(0.18 + (twinkle + 1) * 0.20 + vis.normalizedHigh * 0.35, 0.08, 0.85);
-                sizeFactor = 0.55 * layerSizeMult;
+            // GlowLevel: valles 2-3, picos 7-9
+            const baseGlow = Math.floor(lerp(2, 9, wH * (0.55 + 0.45 * vis.normalizedHigh)));
+            energyIndex = clamp(baseGlow, 0, vis.glowLevels - 1);
+            if (this._shockGlow > 0) {
+                energyIndex = clamp(energyIndex + Math.round(this._shockGlow * 3), 0, vis.glowLevels - 1);
             }
+
+            // ColorVariant: sube en picos hacia el tono más brillante
+            colorVariantIdx = clamp(Math.floor(wH * (COLOR_VARIANTS - 1)), 0, COLOR_VARIANTS - 1);
+
+            // Opacidad: base 0.50 - 0.65, picos 0.90 - 1.0
+            alpha = lerp(0.50, 0.98, wH);
+            if (vis.normalizedHigh > 0.4) {
+                alpha = clamp(alpha + vis.normalizedHigh * 0.15, 0, 1.0);
+            }
+
+            // Tamaño del sprite: fino y nítido en valles (0.65), dilatado en crestas (1.25)
+            const ringSizeMult = lerp(0.65, 1.25, wH);
+            sizeFactor = ringSizeMult * layerSizeMult;
 
         } else {
             // CORE & MANTLE: CONTRAST LOCK ESTRICTO
@@ -508,6 +435,13 @@ class AudioVisualizer {
         this._prevMidRaw  = 0;
         this._prevHighRaw = 0;
 
+        // Impulso y Decay elástico para el Core Jump (+35% a +45% en golpes)
+        this.coreJumpOffset    = 0.0;
+        this._prevBassForJump  = 0.0;
+
+        // Espectro espacial pre-calculado para el anillo único de corona (220 puntos, cero GC)
+        this.coronaPeakHeights = new Float32Array(220);
+
         this.bassHistory   = new Array(120).fill(0);
         this.historyIndex  = 0;
         this.lastBeatTime  = 0;
@@ -536,6 +470,9 @@ class AudioVisualizer {
             // Disparar shockwave
             shockwavePhase  = 0.0;
             shockwaveActive = true;
+
+            // Salto elástico máximo en el núcleo en cada beat detectado
+            this.coreJumpOffset = 0.45;
 
             this.ctx.fillStyle = "rgba(255,255,255,0.08)";
             this.ctx.globalCompositeOperation = "lighter";
@@ -613,30 +550,18 @@ class AudioVisualizer {
                                    baseRadius, this, "mantle"));
         }
 
-        // CAPA 3 – CORONA: Hilo Continuo (80%) + Halo Flotante (20%)
-        const coronaTotal = LAYER.corona.count;
-        const ringCount   = Math.floor(coronaTotal * 0.80); // ~176 partículas
-        const haloCount   = coronaTotal - ringCount;        // ~44 partículas
-        const ringRadius  = baseRadius * 1.38;              // Radio exacto continuo 1.38 * baseRadius
+        // CAPA 3 – CORONA (Anillo Frontal Único y Continuo, 100% de partículas)
+        const coronaTotal = LAYER.corona.count; // 220 partículas
+        const ringRadius  = baseRadius * 1.42;  // 1.42 * sphereBaseRadius exacto
 
-        // Anillo Principal continuo (80%): círculo perfecto y equidistante exacto
-        for (let i = 0; i < ringCount; i++) {
-            const angle = (i / ringCount) * Math.PI * 2;
+        for (let i = 0; i < coronaTotal; i++) {
+            const angle = (i / coronaTotal) * Math.PI * 2;
             const bx = Math.cos(angle) * ringRadius;
             const by = Math.sin(angle) * ringRadius;
-            const bz = 0;
-            this.dots.push(new Dot(this.dots.length, bx, by, bz, baseRadius, this, "corona", false));
-        }
-
-        // Polvo Estelar / Halo Exterior (20%): chispas sueltas (1.20 a 1.62 * baseRadius)
-        for (let i = 0; i < haloCount; i++) {
-            const angle = i * 2.3999632; // golden angle para dispersión armónica
-            const rNorm = Math.abs(((Math.sin(i * 12.9898) * 43758.5453) % 1));
-            const r = baseRadius * (1.20 + rNorm * 0.42);
-            const bx = Math.cos(angle) * r;
-            const by = Math.sin(angle) * r;
-            const bz = (Math.sin(angle * 3) * 0.08) * baseRadius;
-            this.dots.push(new Dot(this.dots.length, bx, by, bz, baseRadius, this, "corona", true));
+            const bz = 0; // Z = 0 estricto
+            const dot = new Dot(this.dots.length, bx, by, bz, baseRadius, this, "corona");
+            dot.ringIndex = i; // Índice secuencial para mapeo espectral suave de una sola línea
+            this.dots.push(dot);
         }
     }
 
@@ -707,8 +632,49 @@ class AudioVisualizer {
         this._prevMidRaw  = this.normalizedMid;
         this._prevHighRaw = this.normalizedHigh;
 
+        // DECAY ELÁSTICO RÁPIDO DEL CORE JUMP
+        this.coreJumpOffset *= 0.80;
+
+        // ATTACK INSTANTÁNEO EN GOLPES DE BOMBO/BAJO PARA EL CORE JUMP
+        const bassDelta = this.normalizedBass - this._prevBassForJump;
+        if (bassDelta > 0.07) {
+            const impulse = Math.min(0.45, bassDelta * 3.0 + this.normalizedBass * 0.25);
+            if (impulse > this.coreJumpOffset) {
+                this.coreJumpOffset = impulse;
+            }
+        }
+        this._prevBassForJump = this.normalizedBass;
+
         // BEAT DETECTION
         this.detectBeats(nowMs);
+
+        // --- SUAVIZADO ESPACIAL DE PICOS DEL ANILLO (SINGLE-LINE PEAK SMOOTHING) ---
+        const numCorona = 220;
+        const halfCorona = 110;
+        if (this.smoothedDataArray) {
+            // 1. Muestrear simétricamente de 0 a pi y reflejar en pi a 2pi (cero costuras)
+            for (let i = 0; i <= halfCorona; i++) {
+                const norm = i / halfCorona;
+                // Muestrear agudos y medios altos (bins 20 a 360)
+                const binIdx = Math.floor(20 + norm * 320);
+                const fftVal = this.smoothedDataArray[Math.min(binIdx, this.smoothedDataArray.length - 1)] / 255.0;
+                
+                // Picos limpios guiados por FFT y agudos
+                const rawVal = Math.max(0, (fftVal - 0.15) * 1.4);
+                this.coronaPeakHeights[i] = rawVal;
+                if (i > 0 && i < halfCorona) {
+                    this.coronaPeakHeights[numCorona - i] = rawVal;
+                }
+            }
+            // 2. Filtro espacial 3-tap circular (1-2-1) para que los vecinos formen una sola línea continua
+            let prevH = this.coronaPeakHeights[numCorona - 1];
+            for (let i = 0; i < numCorona; i++) {
+                const currH = this.coronaPeakHeights[i];
+                const nextH = this.coronaPeakHeights[(i + 1) % numCorona];
+                this.coronaPeakHeights[i] = (prevH * 0.25 + currH * 0.50 + nextH * 0.25);
+                prevH = currH;
+            }
+        }
 
         // AVANCE DEL SHOCKWAVE (~35 frames a 60fps = 0.58s de duración)
         if (shockwaveActive) {
