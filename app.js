@@ -116,50 +116,54 @@ class Dot {
         const cfg = LAYER[this.layer];
         const t   = vis.globalTime;
 
-        // 1. SELECCION DE ENERGIA SEGUN CAPA
-        let audioPush    = 0;
-        let waveSine     = 0;
-        let pushForLayer = 0;
+        // 1. AUDIO PUSH POR CAPA
+        // Solo impulsa la fisica elastica (currentSize -> glow/tamano).
+        // NO se usa para deformar posicion en core/mantle.
+        let audioPush = 0;
+        let waveSine  = 0;
 
         if (this.layer === "core") {
-            const wA     = 0.3 + vis.normalizedBass * 0.6;
-            waveSine     = wA * Math.sin(t * 4 - this.lon * 6);
-            audioPush    = vis.normalizedBass * 0.8 + vis.normalizedEnergy * 0.2 + Math.max(0, waveSine);
-            pushForLayer = vis.normalizedBass * 0.35;
+            // NUCLEO: respiracion isotropa pura.
+            // Sin ondas angulares (lon/lat) -> forma esferica 100% simetrica.
+            audioPush = vis.normalizedBass * 0.75 + vis.normalizedEnergy * 0.15;
 
         } else if (this.layer === "mantle") {
-            const wA = 0.2 + vis.normalizedMid * 0.4;
+            // MANTO: modos simetricos originales (Diamond / Chevron) por midEnergy.
+            // waveSine solo impulsa audioPush (fisica), NO posicion directamente.
+            const wA = 0.18 + vis.normalizedMid * 0.32;
             if (vis.mode === "diamond") {
-                waveSine  = wA * Math.sin(t * 3 - this.lon * 5);
-                audioPush = vis.normalizedMid * 0.45 + vis.normalizedEnergy * 0.25 + Math.max(0, waveSine);
+                waveSine = wA * Math.sin(t * 3 - this.lon * 5);
             } else {
-                waveSine  = wA * Math.sin(t * 3 - this.lat * 5);
-                audioPush = vis.normalizedMid * 0.35 + vis.normalizedEnergy * 0.35 + Math.max(0, waveSine);
+                waveSine = wA * Math.sin(t * 3 - this.lat * 5);
             }
-            const organicWave = 0.08 * Math.sin(this.lon * 3 + t * 1.2) * Math.cos(this.lat * 2 + t * 0.7);
-            pushForLayer = vis.normalizedMid * 0.20 + organicWave;
+            audioPush = vis.normalizedMid * 0.40 + vis.normalizedEnergy * 0.20 + Math.max(0, waveSine);
 
-        } else { // corona
+        } else {
+            // CORONA: sin cambios - logica intacta
             const jitter = vis.normalizedHigh > 0.55
                 ? 0.06 * Math.sin(t * this.jitterFreq + this.jitterPhase) : 0;
             waveSine  = (0.15 + vis.normalizedHigh * 0.5) * Math.sin(t * 5 - this.lon * 8);
             audioPush = vis.normalizedHigh * 0.55 + vis.normalizedEnergy * 0.15
                       + Math.max(0, waveSine) + jitter;
-            pushForLayer = vis.normalizedHigh * 0.25 + jitter * 0.5;
         }
 
-        // 2. SHOCKWAVE – viaja CORE -> MANTLE -> CORONA con desfases
+        // 2. SHOCKWAVE SIMETRICO - onda de luz
+        // Impulsa fisica (glow) + micro-pulso radial UNIFORME (max +6%).
+        // NO anade desplazamiento diferencial por angulo -> no deforma la esfera.
+        this._shockGlow = 0;
         if (shockwaveActive) {
-            const delay      = this.layer === "core" ? 0.0 : this.layer === "mantle" ? 0.15 : 0.35;
+            const delay      = this.layer === "core" ? 0.0 : this.layer === "mantle" ? 0.18 : 0.38;
             const localPhase = clamp(shockwavePhase - delay, 0, 1);
             const wave       = localPhase < 0.3
                 ? localPhase / 0.3
                 : Math.exp(-6 * (localPhase - 0.3));
-            audioPush    += wave * 0.9;
-            pushForLayer += wave * 0.35;
+            audioPush       += wave * 0.55;
+            this._shockGlow  = wave;
         }
 
-        // 3. TOPOGRAFIA NCS (desplazamiento vectorial 3D)
+        // 3. DESPLAZAMIENTO RADIAL NCS (solo manto, acotado al 8%)
+        // Core y corona: dispMag = 0 -> esfera perfecta.
+        // Manto: muy suave, concentrado en hemisferio frontal (centerFactor).
         const dataIndex = Math.floor((this.index / vis.dots.length) * 120);
         let audioTopo   = vis.smoothedDataArray
             ? vis.smoothedDataArray[Math.min(dataIndex, vis.smoothedDataArray.length - 1)] / 255.0 : 0;
@@ -170,9 +174,12 @@ class Dot {
         this.edgeFactor = clamp(rad2D / this.maxRadius, 0, 1);
         const centerFactor = 1.0 - this.edgeFactor;
 
-        const pushDisp = clamp((audioTopo * 0.6) + (waveSine * 0.3), 0, Infinity);
-        const dispMag  = (pushDisp * 1.5 * centerFactor) + pushForLayer;
-        audioPush     *= (0.8 + 0.2 * this.edgeFactor);
+        let dispMag = 0;
+        if (this.layer === "mantle") {
+            const rawDisp = clamp(audioTopo * 0.55 + Math.max(0, waveSine) * 0.12, 0, 1);
+            dispMag = rawDisp * 0.08 * centerFactor;
+        }
+        audioPush *= (0.8 + 0.2 * this.edgeFactor);
 
         // 4. FISICA NEWTONIANA (Hook's Law + Damping)
         this.acceleration  = audioPush;
@@ -184,15 +191,22 @@ class Dot {
         if (this.currentSize < 0) this.currentSize = 0;
 
         // 5. ROTACION 3D INDEPENDIENTE POR CAPA
-        const rotY = vis.globalTime * 0.15  * cfg.rotDirY;
+        const rotY = vis.globalTime * 0.15 * cfg.rotDirY;
         const rotX = Math.sin(vis.globalTime * 0.1) * 0.15 * cfg.rotDirX;
-        const rotZ = vis.globalTime * 0.05  * cfg.rotDirZ;
+        const rotZ = vis.globalTime * 0.05 * cfg.rotDirZ;
 
         const bassBump = this.layer === "core"   ? vis.normalizedBass
-                       : this.layer === "mantle" ? vis.normalizedMid  * 0.6
+                       : this.layer === "mantle" ? vis.normalizedMid  * 0.5
                        :                           vis.normalizedHigh * 0.5;
-        const expandPulse = 1.0 + bassBump * 0.15
-                          + pseudoNoise(this.baseX, this.baseY, vis.globalTime) * 0.05;
+
+        // Micro-pulso shockwave uniforme (max 6%), igual para TODAS las particulas
+        const swRadial = this._shockGlow * 0.06;
+
+        const expandPulse = 1.0
+            + bassBump * 0.12
+            + pseudoNoise(this.baseX, this.baseY, vis.globalTime) * 0.04
+            + swRadial;
+
         const finalDist = Math.max(0.01, expandPulse + dispMag);
 
         const px = this.baseX * finalDist;
@@ -209,7 +223,8 @@ class Dot {
         this.currentX = x2; this.currentY = y2; this.currentZ = z2;
 
         // 6. PROYECCION PERSPECTIVA 2D
-        const fovPulse = shockwaveActive ? lerp(1000, 1080, Math.exp(-4 * shockwavePhase)) : 1000;
+        // FOV con micro-pulso simetrico del shockwave (max +60px)
+        const fovPulse = 1000 + this._shockGlow * 60;
         const zProj    = 1500 + this.currentZ;
         this.scale     = fovPulse / zProj;
 
@@ -234,6 +249,13 @@ class Dot {
         let alpha = clamp(0.05 + depthNorm * 0.4 + this.currentSize * 0.5, 0, 1);
         alpha    *= (0.70 + 0.30 * this.edgeFactor);
         if (this.layer === "corona") alpha = clamp(alpha * (1 + vis.normalizedHigh), 0, 1);
+        // Depth clarity en el manto: particulas traseras mas translucidas, frontales nitidas
+        if (this.layer === "mantle") alpha *= (0.35 + 0.65 * depthNorm);
+        // Glow boost de shockwave: onda de luz simetrica (no deforma posicion)
+        if (this._shockGlow > 0) {
+            const glowBoost = Math.round(this._shockGlow * 2.5);
+            energyIndex = clamp(energyIndex + glowBoost, 0, vis.glowLevels - 1);
+        }
 
         const progresoColor = Math.abs((vis.globalTime / 3.0) % NUM_HUES);
         const hueIdx1       = Math.floor(progresoColor);
