@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 //  AUDIO VISUALIZER PULSE  –  Multi-Layer 3D Sphere Engine
 //  Arquitectura: 3 Capas Concéntricas + Shockwave + 3-Band EQ
 //  Zero Dependencies  |  ES6+ OOP  |  Vanilla JS
